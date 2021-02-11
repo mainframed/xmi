@@ -1,4 +1,4 @@
-# The Python XMIT/Virtual Tape unload script
+# The Python XMIT/Virtual Tape Unload Library
 
 This script parses and extracts the contents of XMIT/AWS/HET files dumping them in to a folder named after the file or dataset in the XMIT file.
 
