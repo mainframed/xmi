@@ -5,7 +5,7 @@ This script parses and extracts the contents of XMIT/AWS/HET files dumping them 
 This library uses the magic library to try to determine the mimetype of the file in the XMIT/TAPE and convert it from ebcdic to UTF-8 if needed. Appropriate file extentions are also added to identified file times. For example, if a file is a JCL file it will convert it to UTF-8, however if it is a ZIP file it will not convert it. This is configurable as described below.
 
 To use this library:
-- Create an XMI object: XMI = XMIT(<args>)
+- Create an XMI object: `XMI = XMIT(<args>)`
 - The arguments are:
    - `filename`: the file to load
    - `LRECL`: manual LRECL override
@@ -20,9 +20,9 @@ To use this library:
 - If the file you are loading is an XMI file (XMIT/TSO Transmission) use `XMI.parse_xmi()` this will generate a XMIT dict (`XMI.xmit`) which contains the contents of the XMI file
 - Next `XMI.get_xmi_files()`/`XMI.get_tape_files()` will collect filenames and files (members) from the XMIT/Tape and populate `XMI.xmit`/`XMI.tape` with the files/members of the datasets and stores the information in `XMI.xmit`/`XMI.tape`
 - Finally now you can print/dump the contents
-   - XMI.print_xmit()/XMI.print_tape() prints the contents of the XMIT file. If the optional argument `human` is passed file sizes are converted to human readable
-   - XMI.unload() this function will extract and translate (if needed based on the file mimetype) all the files/members from the provided XMIT/Tape. The folder and other options provided upon initialization affect the output folder and translation. By default the output folder is `./`, and the file will have the number column removed from the far right.
-   - XMI.dump_xmit_json() takes all the arguments and file flags/information and dumps it to a json file named after the XMIT file
+   - `XMI.print_xmit()`/`XMI.print_tape()` prints the contents of the XMIT file directory. If the optional argument `human` is passed file sizes are converted to human readable
+   - `XMI.unload()` this function will extract and translate (if needed based on the file mimetype) all the files/members from the provided XMIT/Tape. The folder and other options provided upon initialization affect the output folder and translation. By default the output folder is `./`, and the file will have the number column removed from the far right.
+   - `XMI.dump_xmit_json()` takes all the arguments and file flags/information and dumps it to a json file named after the XMIT file
 
 ## Example Usage
 
