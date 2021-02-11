@@ -99,7 +99,7 @@ optional arguments:
   --encoding ENCODING   EBCDIC encoding translation table (default: cp1140)
 ```
 
-### conver_file.py
+### convert_file.py
 
 This script will convert an EBCDIC file to UTF-8 using record length 80 and EBCDIC codepage 1140. To change the record length and codepage pass two arguments:
 
