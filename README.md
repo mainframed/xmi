@@ -31,7 +31,7 @@ A very simple usage of this script:
 Assuming you dowloaded `CBT982.XMI` fomr http://CBTTAPE.org:
 
 ```python
-XMI = XMIT(filename=CBT982.XMI)
+XMI = XMIT(filename="CBT982.XMI")
 XMI.parse_xmi()
 XMI.get_xmi_files()
 XMI.print_xmit(human=True)
