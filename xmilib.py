@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+# Version 0.1
+# Author Soldier of Fortran (Phil Young)
 # The Python XMIT/Virtual Tape unload script
 # This script will unload XMI(T)/AWS/HET files
 # dumping them in to a folder named after the file or
