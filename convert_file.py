@@ -4,7 +4,7 @@ from xmilib import XMIT
 import sys
 
 if len(sys.argv) < 2:
-    print("usage:\n\n{} ebcdic_file [record length] [ebcdic codepage]".format(sys.argv[0]))
+    print("Converts EBCDIC files using a set record lenght\n\nusage:\n\n{} ebcdic_file [record length] [ebcdic codepage]".format(sys.argv[0]))
     print("\nset record length to 0 to not add new lines every [record length]\nDefault record length is 80\nDefault codepage is cp1140")
     sys.exit()
 
