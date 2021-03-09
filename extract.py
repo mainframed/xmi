@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from xmilib import XMIT
+import xmi
 import logging
 import os
 import argparse
@@ -28,6 +28,7 @@ def main():
     arg_parser.add_argument('-H', '--human', help="Print filesizes as human readable", action="store_true", default=False)
     arg_parser.add_argument('-f', '--force', help="Force all files to be translated to plain text regardless of mimetype", action="store_true", default=False)
     arg_parser.add_argument('-b', '--binary', help="Force all files to remain EBCDIC binary files regardless of mimetype", action="store_true", default=False)
+    arg_parser.add_argument('--message', help="Prints message (if available) and exits", action="store_true", default=False)
     arg_parser.add_argument('-m', '--modify', help="Set the extracted file last modify date to match ISPF/Tape statistics if available", action="store_true", default=False)
     arg_parser.add_argument("--outputdir", help="Folder to place tape files in, default is current working directory", default=os.getcwd())
     arg_parser.add_argument("--encoding", help="EBCDIC encoding translation table", default='cp1140')
@@ -36,7 +37,7 @@ def main():
 
     args = arg_parser.parse_args()
 
-    XMI = XMIT(filename=args.FILENAME,
+    XMI = xmi.XMIT(filename=args.FILENAME,
                 loglevel=args.loglevel,
                 outputfolder=args.outputdir,
                 unnum=args.unnum,
@@ -47,7 +48,11 @@ def main():
                 modifydate=args.modify
                 )
 
-    XMI.go()
+    XMI.open()
+
+    if args.message:
+        print(XMI.get_message())
+        return
 
     if args.list:
         for f in XMI.get_files():
