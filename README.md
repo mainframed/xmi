@@ -80,7 +80,7 @@ behind the scenes you can enable debugging:
 
 - [Documentation](https://xmi.readthedocs.io/)
   - [Installation](https://xmi.readthedocs.io/en/latest/install.html)
-  - [API](https://xmi.readthedocs.io/en/latest/handbook/xmi.html)
+  - [API](https://xmi.readthedocs.io/en/latest/xmi.html)
   - [XMI File format](https://xmi.readthedocs.io/en/latest/netdata.html)
   - [AWS/HET File format](https://xmi.readthedocs.io/en/latest/vitualtape.htm)
   - [IEBCOPY File format](https://xmi.readthedocs.io/en/latest/iebcopy.htm)
