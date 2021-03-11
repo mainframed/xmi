@@ -37,7 +37,8 @@ def main():
 
     args = arg_parser.parse_args()
 
-    XMI = xmi.XMIT(filename=args.FILENAME,
+    XMI = xmi.XMIT(
+                filename=args.FILENAME,
                 loglevel=args.loglevel,
                 outputfolder=args.outputdir,
                 unnum=args.unnum,

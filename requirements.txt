@@ -1,0 +1,4 @@
+ebcdic~=1.1.1
+prettytable~=2.1.0
+python-magic~=0.4.22
+wcwidth~=0.2.5

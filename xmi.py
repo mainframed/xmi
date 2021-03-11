@@ -1,4 +1,6 @@
-"""NETDATA/AWSTAPE/HET file library.
+"""
+xmi Python Library
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     The NETDATA file format (CMS SENDFILE or TSO TRANSMIT/XMIT) is used
     primarily to transfer files between mainframes. The file consists of
@@ -12,7 +14,11 @@
     AWS is the short name for these tape file types. Later the opensource
     project Hercules created the Hercules Emulated Tape, or HET, which builds
     on the AWS format by adding compression. Virtual tape files consist
-    of one or more datasets and optional metadate stored in labels.
+    of one or more datasets and optional metadata stored in labels.
+
+    This module consists of methods to extract or open XMI/AWS/HET mainframe
+    files. It also contains the XMIT class which implements XMI, AWS and HET
+    file management to read and extract datasets and members.
 """
 
 # Copyright (c) 2021, Philip Young
@@ -40,12 +46,11 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-__version__ = '0.3'
+__version__ = '0.5'
 __author__ = 'Philip Young'
 __license__ = "GPL"
 
 
-from hexdump import hexdump
 from pprint import pprint
 from pathlib import Path
 from prettytable import PrettyTable
@@ -100,29 +105,29 @@ IBM_text_units[0x8012] = { 'name' : "INMTYPE" , 'type' : "hex",       'desc' : '
 def convert_ebcdic(ebcdic_file, lrecl=80):
     '''Converts an ebcdic mainframe file to text. Returns string.
 
-    Arguments:
-        * ebcdic_file (bytes): the file to be converted
-        * lrecl (int): Record length. A newline is inserted every lrecl bytes.
+    Args:
+        ebcdic_file (byte): the file to be converted
+        lrecl (int): Record length. A newline is inserted every lrecl bytes.
     '''
     return XMIT.convert_text_file(ebcdic_file, lrecl)
 
 
-def extract_all(mainframe_file, output=os.getcwd()):
+def extract_all(mainframe_file, output='./'):
     '''Extracts all datasets and members to output directory.
 
-    Arguments:
-        * mainframe_file (str): path to XMI/AWS/HET file
-        * output (str): output folder. Defaults to current working directory
+    Args:
+        mainframe_file (str): path to XMI/AWS/HET file
+        output (str): output folder. Defaults to current working directory
     '''
     mfile = XMIT(filename=mainframe_file, outputfolder=output)
-    mfile.parse()
+    mfile.open()
     mfile.extract_all()
 
 
 def list_all(mainframe_file):
     '''Returns a list of all datasets and members in XMI/AWS/HET file.'''
     mfile = XMIT(filename=mainframe_file)
-    mfile.parse()
+    mfile.open()
     files = []
     for f in mfile.get_files():
         if mfile.is_pds(f):
@@ -132,9 +137,70 @@ def list_all(mainframe_file):
             files.append(f)
     return files
 
+def open_file(
+        filename=None,
+        LRECL=80,
+        loglevel=logging.WARNING,
+        infile=None,
+        outputfolder="./",
+        encoding='cp1140',
+        unnum=True,
+        quiet=False,
+        force_convert=False,
+        binary=False,
+        modifydate=False
+    ):
+    '''Opens a XMI/AWS/HET file and returns an XMIT object
+
+    Args:
+        filename (str): The path and filename of an XMI/AWS/HET file. Defaults
+            to None.
+        LRECL (int): If record length cannot be determined this value is used
+        when converting from EBCDIC to UTF-8. Defaults to 80.
+        loglevel (int): Level of logging, based on
+            https://docs.python.org/3/library/logging.html#levels.
+            Defaults to ``logging.WARNING``.
+        outputfolder (str): Output file path for extracted files.
+            Detaults to current working directory.
+        encoding (str): EBCDIC codepage used when translating from EBCDIC to
+            UTF-8. Defaults to cp1140
+        infile (str): folder/file name to use for XMI output instead of the
+                detaset name included in the metadata.
+        unnum (bool): Some mainframe files have numbers in columns 72-80
+            denoting line numbers. If True files converted from EBCDIC
+            will have these columns removed. Default to True.
+        quiet (bool): Do not print any output messages whle extracting files.
+            Default to False.
+        force_convert (bool): Converts all files utf-8 ignoring mimetype.
+            Defaults to False.
+        binary (bool): Extract files as binaries, ignoring mimetype.
+            Defaults to False.
+        modifydate (bool): If created date/last modified date information is
+            available change the last modified date of the extracted file to
+            match. Defaults to False.
+    '''
+    mfile = XMIT(
+        filename=filename,
+        LRECL=LRECL,
+        loglevel=loglevel,
+        infile=infile,
+        outputfolder=outputfolder,
+        encoding=encoding,
+        unnum=unnum,
+        quiet=quiet,
+        force_convert=force_convert,
+        binary=binary,
+        modifydate=modifydate
+    )
+    mfile.open()
+    return mfile
+
+
 
 class XMIT:
-    """Mainframe XMI/AWS/HET file.
+    """
+    Mainframe XMI/AWS/HET file class.
+    =================================
 
     This class contains modules to parse the control records for NETDATA,
     AWSTAPE and HET file format as well as methods to parse IEBCOPY records
@@ -148,30 +214,30 @@ class XMIT:
     to gather file information and provides all metadata as json.
 
     Examples:
-        Load an XMI file and extract all contents:
+        Load an XMI file and extract all contents::
 
             >>> from xmilib import XMIT
             >>> obj = XMIT(filename="/path/to/FILE100.XMI")
-            >>> obj.parse()
+            >>> obj.open()
             >>> obj.set_output_folder("/path/to")
             >>> obj.unload_files()
 
-        Load an AWS file and view metatdata JSON:
+        Load an AWS file and view metatdata JSON::
 
             >>> from xmilib import XMIT
             >>> obj = XMIT(filename="/path/to/FILE420.AWS")
-            >>> obj.parse()
+            >>> obj.open()
             >>> print(obj.get_json())
 
         Load an XMI file, extract member (aka file) from paritioned
-        dataset (i.e PDS aka folder):
+        dataset (i.e PDS aka folder)::
 
             >>> from xmilib import XMIT
             >>> obj = XMIT(filename="/path/to/FILE720.XMI")
             >>> obj.parse()
             >>> obj.unload_file("PDS.IN.XMI", "FILE001")
 
-        Load an HET file, extract dataset (PDS or sequential):
+        Load a HET file, extract datasets (PDS or sequential):
 
             >>> from xmilib import XMIT
             >>> obj = XMIT(filename="/path/to/tapefile01.het")
@@ -193,19 +259,21 @@ class XMIT:
             when converting from EBCDIC to UTF-8. Defaults to 80.
         loglevel (int): Level of logging, based on
             https://docs.python.org/3/library/logging.html#levels.
-            Defaults to loggin.WARNING.
+            Defaults to ``loggin.WARNING``.
         outputfolder (str): Output file path for extracted files.
             Detaults to current working directory.
         encoding (str): EBCDIC codepage used when translating from EBCDIC to
             UTF-8. Defaults to cp1140
-        unnum (bool): Mainframe files may have numbers in columns 72-80
+        infile (str): folder/file name to use for XMI output instead of the
+                detaset name included in the metadata.
+        unnum (bool): Some mainframe files have numbers in columns 72-80
             denoting line numbers. If True files converted from EBCDIC
             will have these columns removed. Default to True.
         quiet (bool): Do not print any output messages whle extracting files.
             Default to False.
-        force (bool): Convert all files UTF-8 ignoring mimetype.
+        force_convert (bool): Converts all files utf-8 ignoring mimetype.
             Defaults to False.
-        binary (bool): Do not convert any files, ignoring mimetype.
+        binary (bool): Extract files as binaries, ignoring mimetype.
             Defaults to False.
         modifydate (bool): If created date/last modified date information is
             available change the last modified date of the extracted file to
@@ -216,16 +284,18 @@ class XMIT:
                  filename=None,
                  LRECL=80,
                  loglevel=logging.WARNING,
+                 infile=None,
                  outputfolder="./",
                  encoding='cp1140',
                  unnum=True,
                  quiet=False,
-                 force=False,
+                 force_convert=False,
                  binary=False,
                  modifydate=False):
         """ """
         self.filename = filename
         self.manual_recordlength = LRECL
+        self.infile = infile
         self.xmit_object = ''
         self.tape_object = ''
         self.outputfolder = Path(outputfolder)
@@ -233,7 +303,7 @@ class XMIT:
         self.INMR03_count = 0
         self.msg = False
         self.file_object = None
-        self.force = force
+        self.force = force_convert
         self.binary = binary
         self.filelocation = 1
         self.ebcdic = encoding
@@ -272,17 +342,16 @@ class XMIT:
         self.logger.debug("force: {}".format(force))
         self.logger.debug("binary: {}".format(binary))
 
-    def parse(self):
-        '''
-        Wrapper for open used in some scripts
-        '''
-        self.open()
-
     def open(self, infile=None):
         """ Loads an XMI/AWS/HET file.
 
-        Use either set_filename(filename=) or set_file_object(data=) before
-        use this function.
+        Args:
+            infile (str): folder/file name to use for output instead of what
+            is included in the metadata. Only used for XMI files.
+
+        Use either ``set_filename(filename=)`` or ``set_file_object(data=)``
+        before using this function if you haven't passed ``filename`` when you
+        initialized this object.
         """
         if not self.filename and not self.file_object:
             raise Exception(
@@ -297,14 +366,19 @@ class XMIT:
         if not self.file_object:
             self.read_file()
 
+        if infile:
+            self.set_infile(infile)
+
         # Is the file an XMI file?
 
         if self.filetype_is_xmi(self.file_object[0:10]):
+            self.xmit = {}
             self.logger.debug("File is an XMIT file")
             self.set_xmit_object(self.file_object)
-            self.parse_xmi(infile)
+            self.parse_xmi()
             self.get_xmi_files()
         elif self.filetype_is_tape(self.file_object[0:4]):
+            self.tape = {}
             self.logger.debug("File is a Virtual Tape file")
             self.set_tape_object(self.file_object)
             self.parse_tape()
@@ -340,14 +414,14 @@ class XMIT:
 
     def set_xmit_file(self, filename):
         '''
-        Wrapper for set_filename with debug statements
+        Alias of ``set_filename()`` with debug statements.
         '''
         self.logger.debug("Setting XMIT filename to: {}".format(filename))
         self.set_filename(filename)
 
     def set_tape_file(self, filename):
         '''
-        Wrapper for set_filename with debug statements
+        Alias of ``set_filename()`` with debug statements.
         '''
         self.logger.debug("Setting TAPE filename to: {}".format(filename))
         self.set_filename(filename)
@@ -386,16 +460,59 @@ class XMIT:
 
     def set_codepage(self, codepage='cp1140'):
         '''
-        Default EBCDIC codepage used for EBCDIC to UTF-8 conversion.
-        Defaults to cp1140.
+        Sets EBCDIC codepage used for EBCDIC to utf-8 conversion.
+        Defaults to ``cp1140``.
+
+        Warning:
+            If this setting changed after a file has been opened/parsed
+            you must reload the file for the changes to take effect.
         '''
         self.logger.debug(
             "Changing codepage from {} to {}".format(self.ebcdic, codepage))
         self.ebcdic = codepage
 
+    def set_force(self, setting=True):
+        '''
+        When setting=True force all files to be converted to utf-8.
+
+        Warning:
+            If this setting changed after a file has been opened/parsed
+            you must reload the file for the changes to take effect.
+        '''
+        self.logger.debug("Setting force file conversion")
+        self.force = setting
+
+    def set_binary(self, setting=True):
+        '''
+        When setting=True ignore mimetype and do not convert any files
+        to UTF-8.
+
+        Warning:
+            If this setting changed after a file has been opened/parsed
+            you must reload the file for the changes to take effect.
+        '''
+        self.logger.debug("Disabling automated file conversion.")
+        self.binary = setting
+
+    def set_unnum(self, setting=True):
+        '''
+        When set to True plaintext files translted to utf-8 will have their
+        number columns removed.
+
+        Some files on mainframes have number in columns 72-80, this library
+        removes those columns by default when converting files. To disable this
+        feature use ``set_unnum(False)``.
+
+        Warning:
+            If this setting changed after a file has been opened/parsed
+            you must reload the file for the changes to take effect.
+        '''
+        self.logger.debug("Disabling unnum.")
+        self.unnum = setting
+
     def read_file(self):
         '''
-        Reads the XMI/AWS/HET file in to a bytes variable.
+        Reads the XMI/AWS/HET file but does not parse it.
         '''
         self.logger.debug("Reading file: {}".format(self.filename))
         with open(self.filename, 'rb') as infile:
@@ -404,7 +521,7 @@ class XMIT:
 
     def read_xmit_file(self):
         '''
-        Reads the XMI file in to a bytes variable.
+        Reads the XMI file but does not parse it.
         '''
         self.logger.debug("Reading file: {}".format(self.filename))
         with open(self.filename, 'rb') as xmifile:
@@ -415,7 +532,7 @@ class XMIT:
 
     def read_tape_file(self):
         '''
-        Reads the AWS/HET file in to a bytes variable.
+        Reads the AWS/HET file but does not parse it.
         '''
         self.logger.debug("Reading file: {}".format(self.filename))
         with open(self.filename, 'rb') as tapefile:
@@ -424,34 +541,24 @@ class XMIT:
         if not self.filetype_is_tape(self.tape_object[0:4]):
             raise Exception("File is not an AWS/HET file.")
 
-    def set_force(self, setting=True):
+    def is_xmi(self, pds, member_name):
         '''
-        Force all files to be converted to UTF-8 when True.
-        '''
-        self.logger.debug("Setting force file conversion")
-        self.force = setting
+        Returns true if a member is an XMI file.
 
-    def set_binary(self, setting=True):
-        '''
-        Ignore mimetype and do not convert any files to UTF-8 when True.
-        '''
-        self.logger.debug("")
-        self.binary = setting
-
-    def is_xmi(self, member_name):
-        '''
-        Checks if a member is an XMI file.
+        Args:
+            pds (str): partioned dataset name
+            member_name (str): pds member
         '''
         self.check_parsed()
+        if self.has_xmi():
+            members = self.xmit['file'][pds]['members'][member_name]
+        else:
+            members = self.tape['file'][pds]['members'][member_name]
         self.logger.debug(
             "Checking if member {} is an XMI file".format(member_name))
-        pds = self.xmit['file']
-        if member_name in self.xmit['file'][pds]:
-            if (self.xmit['file'][pds]['members']
-                    [member_name]['mimetype'] == 'application/xmit'):
-                return True
-            self.logger.debug(
-                "Member {} not found in {}".format(member_name, pds))
+
+        if 'mimetype' in members and members['mimetype'] == 'application/xmit':
+            return True
         return False
 
     def has_xmi(self):
@@ -611,12 +718,12 @@ class XMIT:
         return members
 
     def get_member_info(self, pds, member):
-        self.check_parsed()
         '''
         Returns a dict containing information about the partitioned dataset
         member.
 
         The returned dict contains:
+
             * mimetype (str): the member mimetype
             * extenstion (str): the member extention based on mimetype
             * RECFM (str): the member record format
@@ -624,16 +731,19 @@ class XMIT:
             * size (int): size of the member
 
         If ISPF stats are available it also contains:
+
             * modified (str): The last modify date of the file in ISO format
             * owner (str): The username of the file owner
             * version (str): The current file version
 
         If the member is an alias (i.e. symbolic link) it also contains:
+
             * alias (str): name of the member this alias points to
 
         If the member is an alias all other information is pulled from the
         member the alias points to.
         '''
+        self.check_parsed()
         self.logger.debug("Getting info for {}({})".format(pds, member))
         info = {}
 
@@ -677,19 +787,16 @@ class XMIT:
 
     def get_member_info_simple(self, pds, member):
         '''
-        Alternate name for get_member_info().
+        Alias of ``get_member_info()``.
         '''
         return (self.get_member_info(pds, member))
-
-    def get_pds_info_simple(self, pds):
-        ''' Alternate name for get_file_info_simple() '''
-        return self.get_file_info_simple(pds)
 
     def get_file_info_simple(self, filename):
         ''' Returns a dict containing a small subset of metadata for the
         dataset.
 
         The returned dict contains:
+
             * mimetype (str): the member mimetype
             * extenstion (str): the member extention based on mimetype
             * modified (str): output from get_last_modified() in ISO format
@@ -712,22 +819,28 @@ class XMIT:
 
         return info
 
+    def get_pds_info_simple(self, pds):
+        ''' Alias of ``get_file_info_simple()``.'''
+        return self.get_file_info_simple(pds)
+
     def get_file_info_detailed(self, filename):
         ''' Returns a dict with metadata. Currently only supports tape files.
 
 
         The returned dict contains the following:
+
             * mimetype (str): the member mimetype
             * extenstion (str): the member extention based on mimetype
             * size (int): output from get_dataset_size()
             * owner (str): output from get_owner()
 
         It may also contain the following:
+
             * dsnser (str): The serial number of the dataset
             * created (str): The date the dataset was created in ISO format
             * expires (str): The date the dataset can be removed in ISO format
             * syscode (str): The system code of the system that generated this
-                this tape file
+              this tape file
             * jobid (str): The job id used to move this dataset to this tape
             * RECFM (str): the member record format
             * LRECL (int): the member line/record length
@@ -821,7 +934,7 @@ class XMIT:
         Returns paritioned dataset member converted to utf-8 based on current
         codepage (default is cp1141).
 
-        Use set_codepage() to change current code page.
+        Use ``set_codepage()`` to change current code page.
         '''
         self.check_parsed()
         if self.force:
@@ -855,6 +968,10 @@ class XMIT:
         else:
             return b''
 
+    def get_seq_decoded(self, pds):
+        '''Alias of ``get_file_decoded()``.'''
+        return self.get_file_decoded(pds)
+
     def get_file_binary(self, filename):
         '''Returns EBCDIC bytes of dataset.'''
         self.check_parsed()
@@ -868,12 +985,16 @@ class XMIT:
         else:
             return b''
 
+    def get_seq_raw(self, pds):
+        '''Alias of ``get_file_binary()``.'''
+        return self.get_file_binary(pds)
+
     def get_file_text(self, filename):
         '''
         Returns dataset converted to utf-8 based on current codepage
         (default is cp1141).
 
-        Use set_codepage() to change current code page.
+        Use ``set_codepage()`` to change current code page.
         '''
         self.check_parsed()
         if self.force:
@@ -889,14 +1010,6 @@ class XMIT:
         else:
             return dataset_dict['data'].decode(self.ebcdic)
 
-    def get_seq_decoded(self, pds):
-        '''Alternate name for get_file_decoded().'''
-        return self.get_file_decoded(pds)
-
-    def get_seq_raw(self, pds):
-        '''Alternate name for get_file_binary().'''
-        return self.get_file_binary(pds)
-
     def is_alias(self, pds, member):
         '''Returns True if the partitioned dataset member is an alias.'''
         self.check_parsed()
@@ -904,11 +1017,6 @@ class XMIT:
             return self.xmit['file'][pds]['members'][member]['alias']
         else:
             return self.tape['file'][pds]['members'][member]['alias']
-
-    def is_file(self, pds):
-        '''Alternate name for is_sequential().'''
-        return self.is_sequential(pds)
-        return False
 
     def is_member(self, pds, member):
         '''
@@ -949,7 +1057,11 @@ class XMIT:
                 and 'members' not in self.tape['file'][pds]
             ):
                 return True
+        return False
 
+    def is_file(self, pds):
+        '''Alias of ``is_sequential()``.'''
+        return self.is_sequential(pds)
         return False
 
     def is_pds(self, pds):
@@ -986,6 +1098,7 @@ class XMIT:
         Returns a list containing XMI file information around nodes/owners.
 
         The list contains the following strings:
+
             * Originating node name
             * Originating user name
             * Destination node name
@@ -1014,21 +1127,13 @@ class XMIT:
 
         print(self.xmit['message']['text'])
 
-    def get_xmit_json(self):
-        '''Alternate name for get_json().'''
-        return self.get_json()
-
-    def get_tape_json(self):
-        '''Alternate name for get_json().'''
-        return self.get_json()
-
     def get_json(self, text=False, indent=2):
         '''
         Returns a string containing all available metadata for the file.
 
-        Arguments:
+        Args:
             text (bool): If True the metadata also includes the file converted
-                to utf-8. Default to False.
+            to utf-8. Default to False.
             indent (int): json file indentation, default to 2
         '''
         if not text:
@@ -1036,12 +1141,20 @@ class XMIT:
 
         return json.dumps(self._get_clean_json(), default=str, indent=indent)
 
+    def get_xmit_json(self):
+        '''Alias of ``get_json()``.'''
+        return self.get_json()
+
+    def get_tape_json(self):
+        '''Alias of ``get_json()``.'''
+        return self.get_json()
+
     def dump_xmit_json(self, json_file_target=None):
         '''
         Extracts all file metadata to filename.json. Where filename is the
         name of the XMI/AWS/HET file.
 
-        Arguments:
+        Args:
             json_file_target (str): folder where to place json file
         '''
         if not json_file_target:
@@ -1124,9 +1237,9 @@ class XMIT:
 
         Virtual tape files begin with a six byte header which contains three
         halfwords:
-            1 the number of bytes in this block
-            2 the number of bytes in the previous block
-            3 end of file flag
+        1 the number of bytes in this block
+        2 the number of bytes in the previous block
+        3 end of file flag
 
         To check if the file is a virtual tape file it confirms that
         the first record previous bytes header is zero as there cannot be
@@ -1137,14 +1250,6 @@ class XMIT:
         # Determine if a file is a virtual tape file
         if self.__get_int(current_file[2:4]) == 0:
             return True
-
-    def print_xmit(self, human=True):
-        '''Alternate name for print_details().'''
-        self.print_details(human=human)
-
-    def print_tape(self, human=True):
-        '''Alternate name for print_details().'''
-        self.print_details(human=human)
 
     def print_details(self, human=True):
         '''Prints a subset of available metadata for all datasets/members
@@ -1205,29 +1310,13 @@ class XMIT:
                     table.add_row([f] + metadata[1:])
         print(table)
 
-    def unload_folder(self, pds):
-        '''Alternate name for unload_pds().'''
-        self.unload_pds(pds)
+    def print_xmit(self, human=True):
+        '''Alias of ``print_details()``.'''
+        self.print_details(human=human)
 
-    def unload_xmit(self):
-        '''Alternate name for unload_files().'''
-        self.unload_files()
-
-    def unload_tape(self):
-        '''Alternate name for unload_files().'''
-        self.unload_files()
-
-    def extract_all(self):
-        '''Alternate name for unload_files().'''
-        self.unload_files()
-
-    def extract_pds(self, pds):
-        '''Alternate name for unload_pds()'''
-        self.unload_pds(pds)
-
-    def extract_dataset(self, dataset):
-        '''Alternate name for unload_file().'''
-        self.unload_file(dataset)
+    def print_tape(self, human=True):
+        '''Alias of ``print_details()``.'''
+        self.print_details(human=human)
 
     def unload_files(self):
         '''
@@ -1237,7 +1326,7 @@ class XMIT:
         If there are partitioned datasets folders will be created based on the
         dataset name and all members will be placed in that folder.
 
-        Output folder can be changed with set_outputfolder(), default is
+        Output folder can be changed with ``set_outputfolder()``, default is
         current working directory.
         '''
         self.check_parsed()
@@ -1258,6 +1347,18 @@ class XMIT:
 
         for f in self.get_files():
             self.unload_pds(f)
+
+    def unload_xmit(self):
+        '''Alias of ``unload_files()``.'''
+        self.unload_files()
+
+    def unload_tape(self):
+        '''Alias of ``unload_files()``.'''
+        self.unload_files()
+
+    def extract_all(self):
+        '''Alias of ``unload_files()``.'''
+        self.unload_files()
 
     def unload_pds(self, pds):
         '''
@@ -1315,6 +1416,14 @@ class XMIT:
             if 'modified' in info and info['modified']:
                 self.change_outfile_date(outfile, info['modified'])
 
+    def unload_folder(self, pds):
+        '''Alias of ``unload_pds()``.'''
+        self.unload_pds(pds)
+
+    def extract_pds(self, pds):
+        '''Alias of ``unload_pds()``'''
+        self.unload_pds(pds)
+
     def unload_file(self, filename, member=None):
         '''
         Extracts one file to output folder.
@@ -1366,26 +1475,11 @@ class XMIT:
         if 'modified' in info and info['modified']:
             self.change_outfile_date(outfile, info['modified'])
 
-# Helper Functions
+    def extract_dataset(self, dataset):
+        '''Alias of ``unload_file()``.'''
+        self.unload_file(dataset)
 
-# hexdump: prints hexdump in ascii and ebcdic
-# sizeof_fmt: human friendly file size
-# convert_text_file: converts EBCDIC plain/text to UTF-8
-# convert_message: converts message from ebcdic to utf-8
-# get_dsorg: converts DSORG flag to text
-# get_recfm: converts RECFM flag to text
-# Check_parse: checks if we've parsed the XMI/Tape file
-# make_int: converts tape label strings to integer
-# ispf_date: converts ispf date to ISO format string
-# __get_int: wrapper for int.from_bytes() to save typing
-
-    def hexdump(self, data):
-        ''' Prints hexdump of of passed bytes in ebcdic and utf8.'''
-        print("=" * 5, "hex", "ebcdic")
-        hexdump(data)
-        print("=" * 5, "hex", "utf-8")
-        hexdump(data.decode(self.ebcdic).encode('ascii', 'replace'))
-        print("=" * 5, "hex end")
+    # Helper Functions
 
     def sizeof_fmt(self, num):
         '''Returns human friendly size of int.'''
@@ -1412,7 +1506,7 @@ class XMIT:
 
         Some mainframe files may have a numbers column (columns 72-80 have
         numbers in them). By default those columns are removed if they only
-        contain numbers. To disable this feature use `set_unnum(False)`.
+        contain numbers. To disable this feature use ``set_unnum(False)``.
         '''
         self.logger.debug("Converting EBCDIC file to UTF-8. Using EBCDIC codepage: '{}' LRECL: {} UnNum: {} Force: {}".format(self.ebcdic, recl, self.unnum, self.force))
         asciifile = ebcdic_text.decode(self.ebcdic)
@@ -1471,11 +1565,13 @@ class XMIT:
         RECFM contains file layout information and is cummulative.
 
         The first letter is one of F, V, U where:
+
             * F = fixed length records
             * V = Variable length records
             * U = Unknown
 
         The additional letters may be:
+
             * B = blocked
             * A = ANSI control characters (for printers)
             * M = machine control characters (for printers)
@@ -1578,25 +1674,22 @@ class XMIT:
 
     # NETDATA (XMI/TSO TRANSMIT) Files
 
-    def parse_xmi(self, infile=None):
+    def parse_xmi(self):
         '''
         Parses an XMI file collecting metadata and files and stores them in the
         object.
-
-        Arguments:
-            * infile (str): folder/file name to use for output instead of what
-                is included in the metadata.
 
         NETDATA files (otherwise known as XMI files) are composed of control
         records which contain metadata and dataset(s).
 
         Control Records:
-            * INMR01 - Header records
-            * INMR02 - File control record(s)
-            * INMR03 - Data control record(s)
-            * INMR04 - User control record
-            * INMR06 - Final record
-            * INMR07 - Notification record
+
+        * INMR01 - Header records
+        * INMR02 - File control record(s)
+        * INMR03 - Data control record(s)
+        * INMR04 - User control record
+        * INMR06 - Final record
+        * INMR07 - Notification record
 
         This library only processes INMR01, INRM02, INMR03, INMR04, and INMR06
         records. INMR07 records are notification records and do not contain
@@ -1647,7 +1740,7 @@ class XMIT:
                         self.logger.debug("No INMDSNAM using filename {}".format(Path(self.filename).stem.upper()))
                         self.xmit['INMR02'][self.filelocation]['INMDSNAM'] = Path(self.filename).stem.upper()
 
-                    if infile:
+                    if self.infile:
                         self.logger.debug("Infile set to {}. Using as filename.".format(infile))
                         dsn = infile
                     else:
@@ -1786,6 +1879,7 @@ class XMIT:
         '''Parses INMR01 records
 
         INRM01 records always contain the following text units:
+
             * INMFTIME - date/time the XMI was created
             * INMLRECL - Record length for this XMI
             * INMFNODE - name of the originating system
@@ -1794,6 +1888,7 @@ class XMIT:
             * INMTUID - userid of the user this XMI is being sent to
 
         The following text units are optional:
+
             * INMFACK - notification receipt
             * INMFVERS - version number
             * INMNUMF - number of files
@@ -1821,30 +1916,33 @@ class XMIT:
 
         An XMI file may contain multiple INMR02 control records. These records
         always contains the following text units:
-            * INMDSORG - dataset organization
-            * INMLRECL - Record length
-            * INMSIZE - size in bytes
-            * INMUTILN - Utility program
+
+        * INMDSORG - dataset organization
+        * INMLRECL - Record length
+        * INMSIZE - size in bytes
+        * INMUTILN - Utility program
 
         Optional text units are:
-            * INMDSNAM - dataset name (messages do not have this text unit)
-            * INMCREAT - the date the file was created
+
+        * INMDSNAM - dataset name (messages do not have this text unit)
+        * INMCREAT - the date the file was created
 
         There are multiple other optional text units which can be read here:
         https://www.ibm.com/support/knowledgecenter/en/SSLTBW_2.3.0/com.ibm.zos.v2r3.ikjb400/inmr02.htm
 
-        The utility program defines how the file was generated and is can be
+        The utility program defines how the file was generated and it can be
         INMCOPY, IEBCOPY, and AMSCIPHR:
-            * INMCOPY - converts a sequential dataset (file) for XMI
-            * IEBCOPY - converts a partitioned dataset (folder) for XMI
-            * AMSCIPHR - encrypts the files in XMI, this library does not
-                support extracting encrypted files.
+
+        * INMCOPY - converts a sequential dataset (file) for XMI
+        * IEBCOPY - converts a partitioned dataset (folder) for XMI
+        * AMSCIPHR - encrypts the files in XMI, this library does not
+          support extracting encrypted files.
 
         Depending on the dataset type the XMI may contain multiple records. The
         process is:
 
-            * If the dataset is sequential - INMCOPY
-            * If it is a partitioned dataset - IEBCOPY -> INMCOPY
+        * If the dataset is sequential - INMCOPY
+        * If it is a partitioned dataset - IEBCOPY -> INMCOPY
 
         Therefore, partitioned datasets will have two INMR02 records.
         '''
@@ -1861,10 +1959,11 @@ class XMIT:
         '''Parses INMR03 records
 
         Defines the file format and contains the following text units:
-            * INMDSORG - dataset organization
-            * INMLRECL - dataset record length
-            * INMRECFM - dataset record format
-            * INMSIZE - size of the dataset in bytes
+
+        * INMDSORG - dataset organization
+        * INMLRECL - dataset record length
+        * INMRECFM - dataset record format
+        * INMSIZE - size of the dataset in bytes
         '''
         self.INMR03_count += 1
         if 'INMR03' not in self.xmit:
@@ -1888,6 +1987,63 @@ class XMIT:
         '''
         Parses a virtual tape file (AWS or HET) collecting metadata and files
         and stores them in the object.
+
+        Virtual tapes are broken down as follows:
+
+        - Header (3 bytes)
+
+            - Current block size (little endian)
+            - Previous block size (little endian)
+            - Flag:
+
+                - 0x2000 ENDREC - End of record
+                - 0x4000 EOF - tape mark
+                - 0x8000 NEWREC - Start of new record
+                - HET file flags can also contain compression flags:
+
+                    - 0x02 BZIP2 compression
+                    - 0x01 ZLIB compression
+
+        - Labels (optional):
+
+            - VOL1 (80 bytes)
+
+                - Volume serial number
+                - Tape owner
+                - More information: https://www.ibm.com/support/knowledgecenter/en/SSLTBW_2.1.0/com.ibm.zos.v2r1.idam300/formds1.htm
+
+            - HDR1 (80 bytes):
+
+                - Dataset name
+                - Dataset serial number
+                - Volume sequence number
+                - Dataset sequence number
+                - Generation number
+                - Version number
+                - Created date
+                - Expiration date
+                - System code (i.e. what OS version)
+                - More information: https://www.ibm.com/support/knowledgecenter/en/SSLTBW_2.1.0/com.ibm.zos.v2r1.idam300/formds2.htm
+
+            - HDR2 (80 bytes)
+
+                - Record format
+                - Block length
+                - Tape density
+                - Position
+                - Job name and step used to copy files to this tape
+                - Tape recording technique
+                - Control character, used for printing
+                - Block attribute
+                - Device serial number
+                - Security flag
+                - Large block length
+                - More information: https://www.ibm.com/support/knowledgecenter/en/SSLTBW_2.1.0/com.ibm.zos.v2r1.idam300/dshead.htm
+
+            - UHL1 - UHL8: (80 bytes):
+
+                - Contains user headers 76 bytes long
+                - More info here: https://www.ibm.com/support/knowledgecenter/en/SSLTBW_2.1.0/com.ibm.zos.v2r1.idam300/m3208.htm
         '''
 
         self.logger.debug("Parsing virtual tape file")
@@ -1909,11 +2065,10 @@ class XMIT:
         HDR1 = HDR2 = volume_label = {}
 
         while loc < len(self.tape_object):
-            # Get tape header
-
+            # tape header
             # Header:
-            # blocksize little endian
-            # prev blocksize little endian
+            # blocksize little endian 2 bytes
+            # prev blocksize little endian 2 bytes
             # Flags(2 bytes)
             #   0x2000 ENDREC End of record
             #   0x4000 EOF    tape mark
@@ -1968,8 +2123,12 @@ class XMIT:
                     # 'label_id' : tape_file[:4].decode(self.ebcdic),
                 }
 
-            if current_record[:4].decode(self.ebcdic) == 'HDR1':
+            if (
+                current_record[:4].decode(self.ebcdic) == 'HDR1'
+                and len(current_record) == 80
+            ):
                 t = current_record.decode(self.ebcdic)
+
                 HDR1 = {
                     # 'label_num' : self.make_int(t[3]),
                     'dsn' : t[4:21].strip(),
@@ -1985,7 +2144,10 @@ class XMIT:
                     'system_code' : t[60:73],
                     'block_count_high' : self.make_int(t[76:80])
                 }
-            if current_record[:4].decode(self.ebcdic) == 'HDR2':
+            if (
+                current_record[:4].decode(self.ebcdic) == 'HDR2'
+                and len(current_record) == 80
+            ):
                 t = current_record.decode(self.ebcdic)
                 HDR2 = {
                     # 'label_num' : self.make_int(t[3]),
@@ -2075,7 +2237,8 @@ class XMIT:
                             msg += " {}: {}".format(key, HDR2[key])
                         self.logger.debug(msg)
                     if UTL:
-                        output['UTL'] = UTL
+                        output['UHL'] = UTL
+                        print('!!!!!!!!UHL FOUND!!!!!!!!' * 100)
                         for i in UTL:
                             self.logger.debug("User Label: {}".format(i))
 
@@ -2111,7 +2274,9 @@ class XMIT:
         #   * COPYR1 record
         #   * COPYR2 record
         #   * Member metadata (filnames, file stats, etc)
-        #   * Files
+        #   * File data itself
+        # PDSEs are followed by other fields, PDSE support is tenious as best
+        # barring a complete rewrite
 
         for filename in self.tape['file']:
             self.logger.debug('Processing Dataset: {}'.format(filename))
@@ -2333,7 +2498,7 @@ class XMIT:
             # directory_zeroes = directory[block_loc:block_loc + 8]                        # In a PDSe this may be 08 00 00 00 00 00 00 00
             # directory_key_len = directory[block_loc + 8:block_loc + 10]                  # 0x0008
             # directory_data_len = self.__get_int(directory[block_loc + 10:block_loc + 12])  # 0x0100
-            # directory_F_in_chat = directory[block_loc + 12:block_loc + 20]               # last referenced member
+            # last_referenced_member = directory[block_loc + 12:block_loc + 20]              # last referenced member
             directory_len = self.__get_int(directory[block_loc + 20:block_loc + 22]) - 2   # Length includes this halfword
             directory_members_info = directory[block_loc + 22:block_loc + 22 + directory_len]
             loc = 0
@@ -2396,7 +2561,7 @@ class XMIT:
         '''Processes partitioned dataset directory blocks, returns dict
         of members and file data/metadata.
 
-        Arguments:
+        Args:
             * filename (str): partitioned dataset name
             * member_blocks (bytes): binary PDS file data
 
@@ -2412,6 +2577,7 @@ class XMIT:
         prev_ttr = 0
         record_closed = False
         magi = magic.Magic(mime_encoding=True, mime=True)
+
         if self.has_xmi():
             lrecl = self.xmit['file'][filename]['COPYR1']['DS1LRECL']
             recfm = self.xmit['file'][filename]['COPYR1']['DS1RECFM']
@@ -2634,6 +2800,7 @@ class XMIT:
         with text unit name and value.
 
         Text units in INMR## records are broken down like this:
+
             * First two bytes are the 'key'/type
             * Second two bytes are how many text unit records there are
             * Then records are broken down by size (two bytes) and the data
