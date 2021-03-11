@@ -339,7 +339,7 @@ class XMIT:
         self.logger.debug("Encoding: {}".format(encoding))
         self.logger.debug("Unnum: {}".format(unnum))
         self.logger.debug("quiet: {}".format(quiet))
-        self.logger.debug("force: {}".format(force))
+        self.logger.debug("force: {}".format(force_convert))
         self.logger.debug("binary: {}".format(binary))
 
     def open(self, infile=None):
