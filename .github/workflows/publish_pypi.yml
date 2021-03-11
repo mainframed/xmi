@@ -4,6 +4,7 @@ on: push
 
 jobs:
   build-n-publish:
+    environment: pypi_env
     name: Build and publish xmi-reader to PyPI and TestPyPI
     runs-on: ubuntu-20.04
 
