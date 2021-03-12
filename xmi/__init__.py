@@ -46,7 +46,7 @@ xmi Python Library
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-__version__ = '0.5.2'
+__version__ = '0.5.5'
 __author__ = 'Philip Young'
 __license__ = "GPL"
 
@@ -359,9 +359,9 @@ class XMIT:
                 " Use set_filename(filename=) or set_file_object(data=)")
 
         if self.filename and self.file_object:
-            self.logger.warning(
-                "go function called with both a filename and a file object."
-                " Using file object.")
+            self.logger.debug(
+                "XMIT.open() function called with both a filename and a file"
+                "object. Using file object.")
 
         if not self.file_object:
             self.read_file()
@@ -384,7 +384,7 @@ class XMIT:
             self.parse_tape()
             self.get_tape_files()
         else:
-            raise Exception("File not XMIT or Virtual Tape")
+            raise Exception("File is not XMI or Virtual Tape")
 
     def set_overwrite(self, setting=True):
         '''
@@ -884,9 +884,9 @@ class XMIT:
         '''
         Returns all user labels on the tape concatenated together in a string.
         '''
-        if self.has_tape() and 'UTL' in self.tape:
+        if self.has_tape() and 'UHL' in self.tape:
             label = ''
-            for user_text in self.tape['UTL']:
+            for user_text in self.tape['UHL']:
                 label += user_text + "\n"
             return label
 
@@ -1807,42 +1807,13 @@ class XMIT:
         dsnfile = self.xmit['file'][filename]['data']
         recl = self.xmit['INMR03'][inrm02num]['INMLRECL']
         recfm = self.xmit['INMR02'][inrm02num]['INMRECFM']
-        # blocksize = self.xmit['INMR02'][inrm02num]['INMBLKSZ']
-        # dsorg = self.xmit['INMR02'][inrm02num]['INMDSORG']
-        # utility = self.xmit['INMR02'][inrm02num]['INMUTILN']
-
-        filetype, datatype = magi.from_buffer( b''.join(dsnfile)).split('; ')
-        datatype = datatype.split("=")[1]
-        extention = mimetypes.guess_extension(filetype)
-
-        if not extention:
-            extention = "." + filetype.split("/")[1]
-
-        # File magic cant detect XMIT files (yet!)
-        if (
-            filetype == 'application/octet-stream'
-            and len(dsnfile[0]) >= 8
-            and dsnfile[0][2:8].decode(self.ebcdic) == 'INMR01'
-        ):
-            extention = ".xmi"
-            filetype = 'application/xmit'
-
-        if self.force:
-            extention = ".txt"
-
-        if filetype == 'text/plain' or datatype != 'binary':
-            if 'F' in recfm:
-                self.xmit['file'][filename]['text'] = self.convert_text_file( b''.join(dsnfile), recl)
-            elif 'V' in recfm:
-                for record in dsnfile:
-                    self.xmit['file'][filename]['text'] += self.convert_text_file(record, len(record)).rstrip() + '\n'
-            else:
-                self.xmit['file'][filename]['text'] = self.convert_text_file(b''.join(dsnfile), self.manual_recordlength)
-
-        self.logger.debug("filetype: {} datatype: {} size: {}".format(filetype, datatype, len(b''.join(dsnfile))))
-        self.xmit['file'][filename]['filetype'] = filetype
-        self.xmit['file'][filename]['datatype'] = datatype
-        self.xmit['file'][filename]['extension'] = extention
+        self.xmit['file'][filename].update(self.__get_file_mimetype_and_convert(
+            file_name=filename,
+            file_data=b''.join(dsnfile),
+            vb_file_data=dsnfile,
+            recfm=recfm,
+            lrecl=recl
+        ))
 
         try:
             self.xmit['file'][filename]['COPYR1'] = self.iebcopy_record_1(dsnfile[0])
@@ -2055,7 +2026,7 @@ class XMIT:
 
         self.tape = {}
         self.tape['file'] = {}
-        UTL = []
+        UHL = []
         loc = 0
         tape_file = b''
         tape_text = ''
@@ -2165,8 +2136,8 @@ class XMIT:
                     'large_block_len' : t[70:80]
                 }
 
-            if current_record.decode(self.ebcdic) == 'UTL':
-                UTL.append(current_record.decode(self.ebcdic))
+            if current_record[:3].decode(self.ebcdic) == 'UHL':
+                UHL.append(current_record.decode(self.ebcdic))
 
             self.logger.debug("Location: {} Blocksize: {} Prev Blocksize: {} EoF: {} EoR: {} Flags: {:#06x} File Size: {}".format(loc, cur_blocksize, prev_blocksize, eof_marker, eor_marker, flags, len(tape_file)))
 
@@ -2223,6 +2194,10 @@ class XMIT:
 
                     if tape_text:
                         output['text'] = tape_text
+                        if self.__is_jcl(tape_text):
+                            output['extension'] = ".jcl"
+                        if self.__is_rexx(tape_text):
+                            output['extension'] = ".rexx"
 
                     if HDR1:
                         output['HDR1'] = HDR1
@@ -2236,10 +2211,11 @@ class XMIT:
                         for key in HDR2:
                             msg += " {}: {}".format(key, HDR2[key])
                         self.logger.debug(msg)
-                    if UTL:
-                        output['UHL'] = UTL
-                        print('!!!!!!!!UHL FOUND!!!!!!!!' * 100)
-                        for i in UTL:
+
+                    if UHL:
+                        print("!! FOUND UHL !!" * 500)
+                        output['UHL'] = UHL
+                        for i in UHL:
                             self.logger.debug("User Label: {}".format(i))
 
                     if 'dsn' in HDR1:
@@ -2251,7 +2227,7 @@ class XMIT:
                     HDR1 = {}
                     HDR2 = {}
                     output = {}
-                    UTL = []
+                    UHL = []
                 else:
                     self.logger.debug('Empty tape entry, skipping')
 
@@ -2576,7 +2552,6 @@ class XMIT:
         deleted_num = 1
         prev_ttr = 0
         record_closed = False
-        magi = magic.Magic(mime_encoding=True, mime=True)
 
         if self.has_xmi():
             lrecl = self.xmit['file'][filename]['COPYR1']['DS1LRECL']
@@ -2631,10 +2606,10 @@ class XMIT:
 
             if ttr_location + 1 > len(sorted_ttrs):
 
-                self.logger.warning("Encoutered more files than members names: Total members: {} Current file: {}".format(len(ttrs), ttr_location+1))
+                self.logger.debug("Encoutered more files than members names: Total members: {} Current file: {}".format(len(ttrs), ttr_location+1))
                 sorted_ttrs.append("??{}".format(deleted_num))
-                ttrs["??{}".format(deleted_num)] = "DELETED{}".format(deleted_num)
-                member_dict['members'][ "DELETED{}".format(deleted_num)] = { 'alias' : False}
+                ttrs["??{}".format(deleted_num)] = "DELETED??{}".format(deleted_num)
+                member_dict['members'][ "DELETED??{}".format(deleted_num)] = { 'alias' : False}
                 deleted_num += 1
 
             ttr_num = sorted_ttrs[ttr_location]
@@ -2649,7 +2624,7 @@ class XMIT:
                 member_ttr,
                 member_key_len,
                 member_data_len
-                ))
+            ))
 
             if 'V' in recfm:
                 vb_member_data += self.handle_vb(member_blocks[loc + 12:loc + 12 + member_data_len])
@@ -2662,39 +2637,13 @@ class XMIT:
                 if PDS_or_PDSE == 'PDSE':
                     record_closed = True
 
-                filetype, datatype = magi.from_buffer(member_data).split('; ')
-                datatype = datatype.split("=")[1]
-                extention = mimetypes.guess_extension(filetype)
+                member_dict['members'][member_name].update( self.__get_file_mimetype_and_convert(
+                    file_name=member_name,
+                    file_data=member_data,
+                    vb_file_data=vb_member_data,
+                    recfm=recfm, lrecl=lrecl
+                ))
 
-                if not extention:
-                    extention = "." + filetype.split("/")[1]
-
-                if self.force:
-                    extention = ".txt"
-
-                # File magic cant detect XMIT files (yet :D)
-                if ( filetype == 'application/octet-stream'
-                   and len(member_data) >= 8
-                   and member_data[2:8].decode(self.ebcdic) == 'INMR01'):
-                    extention = ".xmi"
-                    filetype = 'application/xmit'
-
-                if filetype == 'text/plain' or datatype != 'binary' or self.force:
-
-                    if 'V' in recfm:
-                        vb_member_text = ''
-                        for record in vb_member_data:
-                            vb_member_text += self.convert_text_file(record, len(record)).rstrip() + '\n'
-                        member_dict['members'][member_name]['text'] = vb_member_text
-
-                    else:
-                        member_dict['members'][member_name]['text'] = self.convert_text_file(member_data, lrecl)
-
-                self.logger.debug("Member name: {} Mime Type: {} Datatype: {} File ext: {} Size: {}".format(member_name, filetype, datatype, extention, len(member_data)))
-                member_dict['members'][member_name]['mimetype'] = filetype
-                member_dict['members'][member_name]['datatype'] = datatype
-                member_dict['members'][member_name]['extension'] = extention
-                member_dict['members'][member_name]['data'] = member_data
                 member_data = b''
                 vb_member_data = []
                 # End of member
@@ -2705,44 +2654,119 @@ class XMIT:
 
         if len(member_data) > 0:
             # sometimes trailing records aren't followed by a zero
-            self.logger.debug('Parsing trailing record')
-            filetype, datatype = magi.from_buffer(member_data).split('; ')
-            datatype = datatype.split("=")[1]
-            extention = mimetypes.guess_extension(filetype)
-
-            if not extention:
-                extention = "." + filetype.split("/")[1]
-
-            if self.force:
-                extention = ".txt"
-
-            # File magic cant detect XMIT files
-            if (
-                filetype == 'application/octet-stream'
-                and len(member_data) >= 8
-                and member_data[2:8].decode(self.ebcdic) == 'INMR01'
-            ):
-                extention = ".xmi"
-                filetype = 'application/xmit'
-
-            if filetype == 'text/plain' or datatype != 'binary' or self.force:
-
-                if 'V' in recfm:
-                    vb_member_text = ''
-                    for record in vb_member_data:
-                        vb_member_text += self.convert_text_file(record, len(record)).rstrip() + '\n'
-                    member_dict['members'][member_name]['text'] = vb_member_text
-
-                else:
-                    member_dict['members'][member_name]['text'] = self.convert_text_file(member_data, lrecl)
-
-            self.logger.debug("Member name: {} Mime Type: {} Datatype: {} File ext: {} Size: {}".format(member_name, filetype, datatype, extention, len(member_data)))
-            member_dict['members'][member_name]['mimetype'] = filetype
-            member_dict['members'][member_name]['datatype'] = datatype
-            member_dict['members'][member_name]['extension'] = extention
-            member_dict['members'][member_name]['data'] = member_data
+            member_dict['members'][member_name].update( self.__get_file_mimetype_and_convert(
+                file_name=member_name,
+                file_data=member_data,
+                vb_file_data=vb_member_data,
+                recfm=recfm, lrecl=lrecl
+            ))
 
         return member_dict
+
+
+    def __get_file_mimetype_and_convert(
+                                        self,
+                                        file_name,
+                                        file_data,
+                                        vb_file_data=None,
+                                        recfm='F',
+                                        lrecl=80
+        ):
+        '''Guesses file extension based on mimetype and converts to utf-8
+        if file is plain/ebcdic
+
+        Args:
+            member_name (str): member name
+            file_data (bytes, str or list): the file to get mimetype for
+            vb_file_data (list): variable block data split in to records
+            recfm (str): the record formart (used to convert variable length)
+            lrecl (int): record length
+
+        Returns a dict with:
+            mimetype (str): file guessed mimetype from libmagic
+            datatype (str): either binary, text, etc
+            extension (str): file extention with period (i.e. ".txt")
+            data (byte): binary file data
+            text (str): Is included when force_text is enabled or when the file
+            mimetype is determined to be a plain/text file.
+        '''
+
+        magi = magic.Magic(mime_encoding=True, mime=True)
+        mime_dict = {}
+
+        filetype, datatype = magi.from_buffer(file_data).split('; ')
+        datatype = datatype.split("=")[1]
+        extention = mimetypes.guess_extension(filetype)
+
+        if not extention:
+            extention = "." + filetype.split("/")[1]
+
+        if self.force:
+            extention = ".txt"
+
+        # File magic cant detect XMIT files (yet :D)
+        if ( filetype == 'application/octet-stream'
+            and len(file_data) >= 8
+            and file_data[2:8].decode(self.ebcdic) == 'INMR01'):
+            extention = ".xmi"
+            filetype = 'application/xmit'
+
+        if filetype == 'text/plain' or datatype != 'binary' or self.force:
+
+            if 'V' in recfm:
+                vb_member_text = ''
+                for record in vb_file_data:
+                    vb_member_text += self.convert_text_file(record, len(record)).rstrip() + '\n'
+                mime_dict['text'] = vb_member_text
+
+            elif 'F' in recfm:
+                mime_dict['text'] = self.convert_text_file(file_data, lrecl)
+            elif 'U' in recfm:
+                mime_dict['text'] = self.convert_text_file(file_data, self.manual_recordlength)
+            else:
+                mime_dict['text'] = self.convert_text_file(file_data, lrecl)
+
+            if self.__is_jcl(
+                mime_dict['text']
+            ):
+                extention = '.jcl'
+
+            elif self.__is_rexx(
+                mime_dict['text']
+            ):
+                extention = '.rexx'
+
+        self.logger.debug("File name: {} Mime Type: {} Datatype: {} File ext: {} Size: {}".format(file_name, filetype, datatype, extention, len(file_data)))
+        mime_dict['mimetype'] = filetype
+        mime_dict['datatype'] = datatype
+        mime_dict['extension'] = extention
+        mime_dict['data'] = file_data
+
+        return mime_dict
+
+    def __is_jcl(self, text_lines=''):
+        '''Returns true if the first line starts with ``//`` and contains
+        ``JOB``'''
+        job_card = text_lines.splitlines()[0].split()
+        if (
+            len(job_card) > 1
+            and job_card[0].startswith("//")
+            and job_card[1] == 'JOB'
+        ):
+            return True
+        return False
+
+
+    def __is_rexx(self, text_lines=''):
+        '''Returns true if the first line starts with ``/*`` and contains
+        ``REXX``'''
+        maybe_rexx = text_lines.splitlines()[0].lstrip()
+        if (
+            maybe_rexx.startswith("/*")
+            and "REXX" in maybe_rexx.upper()
+        ):
+            return True
+        return False
 
     def __fix_circular_alias(self, pds):
         '''Some XMI files have circular aliases, this function updates
