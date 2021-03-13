@@ -46,7 +46,7 @@ xmi Python Library
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-__version__ = '0.5.5'
+__version__ = '0.5.6'
 __author__ = 'Philip Young'
 __license__ = "GPL"
 
@@ -291,8 +291,9 @@ class XMIT:
                  quiet=False,
                  force_convert=False,
                  binary=False,
-                 modifydate=False):
-        """ """
+                 modifydate=False
+                ):
+
         self.filename = filename
         self.manual_recordlength = LRECL
         self.infile = infile
@@ -1366,7 +1367,7 @@ class XMIT:
         file extensions based on mimetype.
 
         If the dataset is a partitioned dataset a folder will be created and
-        all members will be placed in that folder.
+        all members will be placed in that sub-folder.
 
         Output folder can be changed with set_outputfolder(), default is
         current working directory.
@@ -2093,7 +2094,6 @@ class XMIT:
                     'owner'   : tape_file[41:51].decode(self.ebcdic),
                     # 'label_id' : tape_file[:4].decode(self.ebcdic),
                 }
-
             if (
                 current_record[:4].decode(self.ebcdic) == 'HDR1'
                 and len(current_record) == 80
