@@ -46,10 +46,11 @@ xmi Python Library
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-__version__ = '0.5.6'
+__version__ = '0.5.7'
 __author__ = 'Philip Young'
 __license__ = "GPL"
 
+__xmi_version__ = __version__
 
 from pprint import pprint
 from pathlib import Path

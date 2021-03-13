@@ -4,13 +4,15 @@ from setuptools import setup, find_packages
 # The directory containing this file
 HERE = pathlib.Path(__file__).parent
 
+from src.xmi import __xmi_version__
+
 # The text of the README file
 README = (HERE / "README.md").read_text()
 
 # This call to setup() does all the work
 setup(
     name="xmi-reader",
-    version="0.5.6",
+    version=__xmi_version__,
     description="Open and extract (unload) XMI/AWS/HET mainframe files.",
     long_description=README,
     long_description_content_type="text/markdown",
