@@ -14,9 +14,9 @@ The most simple way to use this library is to import this module and use
 To list all datasets and dataset members::
 
     for f in het_obj.get_files():
-        if het_obj.is_pds(f)
-            for m in het_obj.get_member():
-                print("{}({})".format(f, m)
+        if het_obj.is_pds(f):
+            for m in het_obj.get_members(f):
+                print("{}({})".format(f, m))
         else:
             print(f)
 
@@ -44,13 +44,16 @@ Print message::
     if xmi_obj.has_message():
         print(xmi_obj.get_message())
 
+or just::
+    print(xmi_obj.get_message())  # Prints None if not message
+
 If you you're having problems with the library or want to see whats happeneing
 behind the scenes you can enable debugging::
 
     import logging
     import xmi
 
-    xmi_obj = xmi.XMIT(filename="/path/to/file.xmi",logging=logging.DEBUG)
+    xmi_obj = xmi.XMIT(filename="/path/to/file.xmi",loglevel=logging.DEBUG)
     xmi_obj.open()
 
 As you can see, using this library is fairly easy.
