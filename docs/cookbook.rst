@@ -45,9 +45,10 @@ Print message::
         print(xmi_obj.get_message())
 
 or just::
-    print(xmi_obj.get_message())  # Prints None if not message
 
-If you you're having problems with the library or want to see whats happeneing
+    print(xmi_obj.get_message())  # Prints 'None' if no message
+
+If you you're having problems with the library or want to see whats happening
 behind the scenes you can enable debugging::
 
     import logging
