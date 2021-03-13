@@ -4,7 +4,7 @@ from setuptools import setup, find_packages
 # The directory containing this file
 HERE = pathlib.Path(__file__).parent
 
-from src.xmi import __xmi_version__
+from xmi import __xmi_version__
 
 # The text of the README file
 README = (HERE / "README.md").read_text()
