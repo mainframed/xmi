@@ -1,10 +1,25 @@
 import pathlib
 from setuptools import setup, find_packages
+import codecs
+import os.path
 
 # The directory containing this file
 HERE = pathlib.Path(__file__).parent
 
-from xmi import __xmi_version__
+
+
+def read(rel_path):
+    here = os.path.abspath(os.path.dirname(__file__))
+    with codecs.open(os.path.join(here, rel_path), 'r') as fp:
+        return fp.read()
+
+def get_version(rel_path):
+    for line in read(rel_path).splitlines():
+        if line.startswith('__version__'):
+            delim = '"' if '"' in line else "'"
+            return line.split(delim)[1]
+    else:
+        raise RuntimeError("Unable to find version string.")
 
 # The text of the README file
 README = (HERE / "README.md").read_text()
@@ -12,7 +27,7 @@ README = (HERE / "README.md").read_text()
 # This call to setup() does all the work
 setup(
     name="xmi-reader",
-    version=__xmi_version__,
+    version=get_version("xmi/__init__.py"),
     description="Open and extract (unload) XMI/AWS/HET mainframe files.",
     long_description=README,
     long_description_content_type="text/markdown",
