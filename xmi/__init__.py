@@ -46,7 +46,7 @@ xmi Python Library
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-__version__ = '0.5.8'
+__version__ = '0.5.9'
 __author__ = 'Philip Young'
 __license__ = "GPL"
 
@@ -1388,7 +1388,12 @@ class XMIT:
         for m in self.get_members(pds):
 
             info = self.get_member_info_simple(pds, m)
-            ext = info['extension']
+
+            if 'extension' in info:
+                ext = info['extension']
+            else:
+                ext = '.bin'
+
             outfile = outfolder / "{}{}".format(m, ext)
 
             if not self.overwrite and outfile.exists():
@@ -1820,6 +1825,7 @@ class XMIT:
         try:
             self.xmit['file'][filename]['COPYR1'] = self.iebcopy_record_1(dsnfile[0])
         except:
+            self.xmit['file'][filename]['filetype'] = self.xmit['file'][filename]['mimetype']
             self.logger.debug("{} is not a PDS leaving".format(filename))
             return
         self.xmit['file'][filename]['filetype'] = "pds/directory"
@@ -2067,7 +2073,9 @@ class XMIT:
 
             if 0x8000 == (flags & 0x8000):
                 eof_marker = False
-                eor_marker = False
+            if flags == 0:
+                self.logger.debug("Flag is 0x00. Some tapes have extra zeroes on end")
+                break
 
             if (
                 0x8000 != (flags & 0x8000)
@@ -2544,7 +2552,7 @@ class XMIT:
 
         '''
 
-        self.logger.debug("Processing PDS Blocks")
+        self.logger.debug("Processing PDS Data Blocks")
 
         loc = 0
         ttr_location = 0

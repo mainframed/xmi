@@ -44,7 +44,7 @@ def main():
                 unnum=args.unnum,
                 quiet=args.quiet,
                 encoding=args.encoding,
-                force=args.force,
+                force_convert=args.force,
                 binary=args.binary,
                 modifydate=args.modify
                 )
