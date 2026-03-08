@@ -209,7 +209,6 @@ def create_xmi(
         from_node='LOCAL',
         to_user='PYTHON',
         to_node='LOCAL',
-        userid=None,
         loglevel=logging.WARNING
     ):
     '''Creates an XMI (NETDATA) file from a local file or folder.
@@ -230,14 +229,11 @@ def create_xmi(
             ``'V'``, ``'U'``).  Default ``'FB'``.
         encoding (str): EBCDIC codepage for text encoding.  Default
             ``'cp1140'``.
-        from_user (str): Originating user ID (max 8 chars).
+        from_user (str): Originating user ID (max 8 chars).  Also used as
+            the userid recorded in PDS member ISPF statistics.
         from_node (str): Originating node name (max 8 chars).
         to_user (str): Destination user ID (max 8 chars).
         to_node (str): Destination node name (max 8 chars).
-        userid (str): When set, ISPF statistics are embedded in each PDS
-            member directory entry using this userid, the current system
-            date/time, and the counted line number.  Has no effect for
-            sequential datasets.  Default ``None`` (no ISPF stats).
         loglevel: Python logging level.  Default ``logging.WARNING``.
 
     Returns:
@@ -253,11 +249,11 @@ def create_xmi(
         from_node=from_node,
         to_user=to_user,
         to_node=to_node,
-        userid=userid,
     )
     if output_file:
         Path(output_file).write_bytes(xmi_bytes)
-    return xmi_bytes
+    else:
+        return xmi_bytes
 
 
 class XMIT:
@@ -2995,16 +2991,14 @@ class XMIT:
             from_node='LOCAL',
             to_user='PYTHON',
             to_node='LOCAL',
-            userid=None,
     ):
         '''Build and return raw XMI (NETDATA) bytes from *input_path*.
 
         If *input_path* is a file  → sequential dataset XMI.
         If *input_path* is a folder → PDS XMI whose members are the files.
 
-        *userid*: when set, ISPF statistics are embedded in each PDS member's
-        directory entry (current date/time, line count, and this userid).
-        Has no effect for sequential datasets.
+        ISPF statistics are always written into PDS directory entries using
+        *from_user* as the userid, the current date/time, and the line count.
         '''
         p = Path(input_path)
         if not p.exists():
@@ -3013,8 +3007,7 @@ class XMIT:
         if p.is_dir():
             return self._build_pds_xmi(p, dsn=dsn, lrecl=lrecl, recfm=recfm,
                                        from_user=from_user, from_node=from_node,
-                                       to_user=to_user, to_node=to_node,
-                                       userid=userid)
+                                       to_user=to_user, to_node=to_node)
         else:
             return self._build_seq_xmi(p, dsn=dsn, lrecl=lrecl, recfm=recfm,
                                        from_user=from_user, from_node=from_node,
@@ -3089,21 +3082,23 @@ class XMIT:
     def _xmi_ispf_date(self, dt, with_time=False):
         '''Encode a Python datetime as ISPF packed-BCD date bytes.
 
-        4-byte form (creation date):  century | year-BCD | day2-BCD | day3-nibble
+        4-byte form (creation date):  century | year-BCD | day2-BCD | day3+sign
         6-byte form (modify date+time): same 4 bytes + hour-BCD | minute-BCD
 
         The encoding mirrors what ispf_date() decodes:
           century byte  = year // 100 - 19   (0 = 1900s, 1 = 2000s)
           year byte     = year % 100 as packed BCD  (2026 → 0x26)
           day bytes 2-3 = 3-digit day-of-year in packed BCD across 1.5 bytes
-                          e.g. day 066: byte2=0x06, byte3=0x60
+                          high nibble of byte3 = third digit,
+                          low nibble of byte3  = 0xF (packed decimal sign)
+                          e.g. day 067: byte2=0x06, byte3=0x7F
         '''
         century = dt.year // 100 - 19
         year_bcd = int('{:02d}'.format(dt.year % 100), 16)
         doy = dt.timetuple().tm_yday
         doy_str = '{:03d}'.format(doy)
         day_byte2 = int(doy_str[0:2], 16)
-        day_byte3 = int(doy_str[2], 16) << 4
+        day_byte3 = (int(doy_str[2], 16) << 4) | 0x0F  # 0xF = packed decimal sign
         result = bytes([century, year_bcd, day_byte2, day_byte3])
         if with_time:
             hour_bcd = int('{:02d}'.format(dt.hour), 16)
@@ -3139,7 +3134,7 @@ class XMIT:
             self._xmi_ispf_date(dt, with_time=True) +     # modify date+time      (6)
             struct.pack('>HHH', lines, lines, 0) +         # lines, added, mod     (6)
             uid +                                          # userid                (8)
-            b'\x00\x00'                                    # reserved              (2)
+            b'\x40\x40'                                    # reserved (EBCDIC sp)  (2)
         )  # total = 30 bytes (15 halfwords)
 
     # -- RECFM / blocksize helpers -------------------------------------- #
@@ -3475,13 +3470,11 @@ class XMIT:
 
         return records
 
-    def _xmi_build_iebcopy(self, members_data, lrecl, recfm, userid=None):
+    def _xmi_build_iebcopy(self, members_data, lrecl, recfm, from_user='PYTHON'):
         '''Build a list of IEBCOPY logical blocks for *members_data*.
 
         *members_data*: list of (name_str, file_bytes) tuples.
-        *userid*: if provided, ISPF statistics are written into each
-                  directory entry with the current system date/time,
-                  line count, and this userid.
+        *from_user*: userid recorded in each PDS directory entry's ISPF stats.
         Returns a list of byte strings, each to be written as a separate
         XMI logical data record (wrapped with _xmi_data_record).
 
@@ -3514,13 +3507,11 @@ class XMIT:
             else:
                 num_lines = len(ebcdic_data) // lrecl if lrecl else 0
 
-            ispf = (self._xmi_ispf_stats(userid, num_lines, now)
-                    if userid else None)
+            ispf = self._xmi_ispf_stats(from_user, num_lines, now)
             ttr_map.append((name, i + 1, ebcdic_data, ispf))
 
-        # Directory block(s) — max 5 entries/block with ISPF (42 bytes each),
-        # or 8 without (12 bytes each). Use 5 as safe limit with ISPF.
-        chunk_size = 5 if userid else 8
+        # Directory block(s): 5 entries/block max with ISPF stats (42 bytes each).
+        chunk_size = 5
         dir_entries = [(name, ttr, ispf) for name, ttr, _, ispf in ttr_map]
         for i in range(0, len(dir_entries), chunk_size):
             dir_block, dir_eom = self._xmi_directory_block(dir_entries[i:i + chunk_size])
@@ -3557,8 +3548,7 @@ class XMIT:
 
     def _build_pds_xmi(self, folder_path, dsn=None, lrecl=80, recfm='FB',
                        from_user='PYTHON', from_node='LOCAL',
-                       to_user='PYTHON', to_node='LOCAL',
-                       userid=None):
+                       to_user='PYTHON', to_node='LOCAL'):
         '''Build a PDS XMI from a folder (one level deep).'''
         folder = Path(folder_path)
         members_data = []
@@ -3574,7 +3564,7 @@ class XMIT:
             dsn = folder.name.upper()
 
         iebcopy_blocks = self._xmi_build_iebcopy(members_data, lrecl, recfm,
-                                                  userid=userid)
+                                                  from_user=from_user)
         inmsize = sum(len(b) for b in iebcopy_blocks)
 
         out = bytearray()
