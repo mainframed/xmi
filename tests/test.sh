@@ -3,6 +3,8 @@
 # This bash script tests xmi.py against the sample XMI/AWS/HET files contained
 # in this folder.
 
+cd "$(dirname "$0")"
+
 echo "Testing XMI files"
 for i in *.xmi; do echo "python3 ../xmi/__init__.py $i";python3 ../xmi/__init__.py $i; done
 
@@ -11,3 +13,6 @@ for i in *.aws; do echo "python3 ../xmi/__init__.py $i";python3 ../xmi/__init__.
 
 echo "Testing HET files"
 for i in *.het; do echo "python3 ../xmi/__init__.py $i";python3 ../xmi/__init__.py $i; done
+
+echo "Testing XMI round-trip (create + extract)"
+python3 -m unittest test_roundtrip -v
