@@ -144,7 +144,7 @@ def open_file(
         loglevel=logging.WARNING,
         infile=None,
         outputfolder="./",
-        encoding='cp1140',
+        encoding='cp500',
         unnum=True,
         quiet=False,
         force_convert=False,
@@ -196,6 +196,68 @@ def open_file(
     mfile.open()
     return mfile
 
+
+
+def create_xmi(
+        input_path,
+        output_file=None,
+        dsn=None,
+        lrecl=80,
+        recfm='FB',
+        encoding='cp500',
+        from_user='PYTHON',
+        from_node='LOCAL',
+        to_user='PYTHON',
+        to_node='LOCAL',
+        userid=None,
+        loglevel=logging.WARNING
+    ):
+    '''Creates an XMI (NETDATA) file from a local file or folder.
+
+    A single file produces a sequential dataset XMI.  A folder (one level
+    deep) produces a partitioned dataset (PDS) XMI whose members are the
+    files found in the folder.
+
+    Args:
+        input_path (str): Path to a file or directory to package as XMI.
+        output_file (str): Path where the XMI file will be written.  If
+            ``None`` the bytes are returned but no file is written.
+        dsn (str): Dataset name to embed in the XMI metadata.  Defaults to
+            the uppercased stem of *input_path* (max 44 characters).
+        lrecl (int): Logical record length used when encoding text to
+            fixed-length EBCDIC records.  Default ``80``.
+        recfm (str): Record format string (``'FB'``, ``'F'``, ``'VB'``,
+            ``'V'``, ``'U'``).  Default ``'FB'``.
+        encoding (str): EBCDIC codepage for text encoding.  Default
+            ``'cp1140'``.
+        from_user (str): Originating user ID (max 8 chars).
+        from_node (str): Originating node name (max 8 chars).
+        to_user (str): Destination user ID (max 8 chars).
+        to_node (str): Destination node name (max 8 chars).
+        userid (str): When set, ISPF statistics are embedded in each PDS
+            member directory entry using this userid, the current system
+            date/time, and the counted line number.  Has no effect for
+            sequential datasets.  Default ``None`` (no ISPF stats).
+        loglevel: Python logging level.  Default ``logging.WARNING``.
+
+    Returns:
+        bytes: Raw XMI file content.
+    '''
+    builder = XMIT(encoding=encoding, loglevel=loglevel)
+    xmi_bytes = builder.build_xmi(
+        input_path,
+        dsn=dsn,
+        lrecl=lrecl,
+        recfm=recfm,
+        from_user=from_user,
+        from_node=from_node,
+        to_user=to_user,
+        to_node=to_node,
+        userid=userid,
+    )
+    if output_file:
+        Path(output_file).write_bytes(xmi_bytes)
+    return xmi_bytes
 
 
 class XMIT:
@@ -287,7 +349,7 @@ class XMIT:
                  loglevel=logging.WARNING,
                  infile=None,
                  outputfolder="./",
-                 encoding='cp1140',
+                 encoding='cp500',
                  unnum=True,
                  quiet=False,
                  force_convert=False,
@@ -2917,6 +2979,613 @@ class XMIT:
                     loc += 2 + tlen
         self.logger.debug("Final Loc: {}".format(loc))
         return tu
+
+
+    # ------------------------------------------------------------------ #
+    #  XMI CREATION METHODS                                               #
+    # ------------------------------------------------------------------ #
+
+    def build_xmi(
+            self,
+            input_path,
+            dsn=None,
+            lrecl=80,
+            recfm='FB',
+            from_user='PYTHON',
+            from_node='LOCAL',
+            to_user='PYTHON',
+            to_node='LOCAL',
+            userid=None,
+    ):
+        '''Build and return raw XMI (NETDATA) bytes from *input_path*.
+
+        If *input_path* is a file  → sequential dataset XMI.
+        If *input_path* is a folder → PDS XMI whose members are the files.
+
+        *userid*: when set, ISPF statistics are embedded in each PDS member's
+        directory entry (current date/time, line count, and this userid).
+        Has no effect for sequential datasets.
+        '''
+        p = Path(input_path)
+        if not p.exists():
+            raise FileNotFoundError("Input path not found: {}".format(input_path))
+
+        if p.is_dir():
+            return self._build_pds_xmi(p, dsn=dsn, lrecl=lrecl, recfm=recfm,
+                                       from_user=from_user, from_node=from_node,
+                                       to_user=to_user, to_node=to_node,
+                                       userid=userid)
+        else:
+            return self._build_seq_xmi(p, dsn=dsn, lrecl=lrecl, recfm=recfm,
+                                       from_user=from_user, from_node=from_node,
+                                       to_user=to_user, to_node=to_node)
+
+    # -- Low-level segment / text-unit builders ------------------------- #
+
+    def _xmi_seg(self, flag, data):
+        '''Return one raw XMI segment: length(1) + flag(1) + data(<=253).'''
+        length = len(data) + 2
+        return bytes([length, flag]) + data
+
+    def _xmi_ctrl_seg(self, record_type, text_unit_bytes, numfiles=0):
+        '''Wrap *record_type* + *text_unit_bytes* into control segments.
+
+        Control records use flag 0xE0 for each segment.  The record type
+        (e.g. 'INMR01') is placed at the start of the first segment,
+        EBCDIC-encoded to exactly 6 characters.
+
+        INMR02 records carry a 4-byte numfiles count between the type name
+        and the text units (pass numfiles= to set it).
+
+        Each segment payload is at most 253 bytes.
+        '''
+        rt_encoded = record_type.upper()[:6].ljust(6).encode(self.ebcdic)
+        prefix = struct.pack('>I', numfiles) if numfiles or record_type.upper().startswith('INMR02') else b''
+        payload = rt_encoded + prefix + text_unit_bytes
+        out = bytearray()
+        while payload:
+            chunk = payload[:253]
+            payload = payload[253:]
+            out += self._xmi_seg(0xE0, chunk)
+        return bytes(out)
+
+    def _xmi_data_record(self, data):
+        '''Segment *data* into XMI data segments with proper flags.
+
+        Flags: single = 0xC0, first = 0x80, middle = 0x00, last = 0x40.
+        '''
+        out = bytearray()
+        chunks = [data[i:i + 253] for i in range(0, len(data), 253)]
+        if not chunks:
+            chunks = [b'']
+        if len(chunks) == 1:
+            out += self._xmi_seg(0xC0, chunks[0])
+        else:
+            out += self._xmi_seg(0x80, chunks[0])
+            for chunk in chunks[1:-1]:
+                out += self._xmi_seg(0x00, chunk)
+            out += self._xmi_seg(0x40, chunks[-1])
+        return bytes(out)
+
+    def _xmi_tu(self, key, value_bytes):
+        '''Build one IBM text unit: key(2) + count(2) + len(2) + value.'''
+        return (struct.pack('>HH', key, 1) +
+                struct.pack('>H', len(value_bytes)) +
+                value_bytes)
+
+    def _xmi_dsn_tu(self, dsn):
+        '''Build an INMDSNAM text unit (0x0002) for a dotted dataset name.
+
+        Each qualifier is a separate text-unit item.
+        '''
+        parts = [p.upper().encode(self.ebcdic) for p in dsn.split('.')]
+        data = struct.pack('>HH', 0x0002, len(parts))
+        for i, part in enumerate(parts):
+            data += struct.pack('>H', len(part)) + part
+        return data
+
+    # -- ISPF statistics helpers ---------------------------------------- #
+
+    def _xmi_ispf_date(self, dt, with_time=False):
+        '''Encode a Python datetime as ISPF packed-BCD date bytes.
+
+        4-byte form (creation date):  century | year-BCD | day2-BCD | day3-nibble
+        6-byte form (modify date+time): same 4 bytes + hour-BCD | minute-BCD
+
+        The encoding mirrors what ispf_date() decodes:
+          century byte  = year // 100 - 19   (0 = 1900s, 1 = 2000s)
+          year byte     = year % 100 as packed BCD  (2026 → 0x26)
+          day bytes 2-3 = 3-digit day-of-year in packed BCD across 1.5 bytes
+                          e.g. day 066: byte2=0x06, byte3=0x60
+        '''
+        century = dt.year // 100 - 19
+        year_bcd = int('{:02d}'.format(dt.year % 100), 16)
+        doy = dt.timetuple().tm_yday
+        doy_str = '{:03d}'.format(doy)
+        day_byte2 = int(doy_str[0:2], 16)
+        day_byte3 = int(doy_str[2], 16) << 4
+        result = bytes([century, year_bcd, day_byte2, day_byte3])
+        if with_time:
+            hour_bcd = int('{:02d}'.format(dt.hour), 16)
+            min_bcd = int('{:02d}'.format(dt.minute), 16)
+            result += bytes([hour_bcd, min_bcd])
+        return result
+
+    def _xmi_ispf_stats(self, userid, num_lines, dt=None):
+        '''Build 30-byte ISPF statistics user data for a PDS directory entry.
+
+        Offsets (from IBM doc):
+          0   VV  version (0x01)
+          1   MM  modification level (0x00)
+          2   flags byte (0x00)
+          3   seconds of last modification (hex)
+          4   creation date  (4 bytes, packed BCD)
+          8   modification date+time (6 bytes, packed BCD)
+          14  current line count (uint16)
+          16  lines added  (uint16)
+          18  lines modified (uint16)
+          20  user ID (8 bytes EBCDIC, space-padded)
+        Total = 30 bytes (15 halfwords → C-byte lower 5 bits = 0x0F)
+        '''
+        import datetime as _dt
+        if dt is None:
+            dt = _dt.datetime.now()
+        lines = min(num_lines, 65535)
+        uid = userid.upper()[:8].encode(self.ebcdic).ljust(8, b'\x40')
+        sec_bcd = int('{:02d}'.format(dt.second), 16)
+        return (
+            bytes([0x01, 0x00, 0x00, sec_bcd]) +           # VV MM flags seconds  (4)
+            self._xmi_ispf_date(dt, with_time=False) +    # creation date         (4)
+            self._xmi_ispf_date(dt, with_time=True) +     # modify date+time      (6)
+            struct.pack('>HHH', lines, lines, 0) +         # lines, added, mod     (6)
+            uid +                                          # userid                (8)
+            b'\x00\x00'                                    # reserved              (2)
+        )  # total = 30 bytes (15 halfwords)
+
+    # -- RECFM / blocksize helpers -------------------------------------- #
+
+    def _xmi_recfm_byte(self, recfm):
+        '''Return the 2-byte RECFM field from a string like "FB", "VB".'''
+        recfm = recfm.upper()
+        first = {'F': 0x80, 'V': 0x40, 'U': 0xC0}.get(recfm[0], 0x80)
+        if 'B' in recfm:
+            first |= 0x10
+        return bytes([first, 0x00])
+
+    def _xmi_blksize(self, lrecl, recfm):
+        '''Calculate a sensible blocksize for IEBCOPY.'''
+        recfm = recfm.upper()
+        if recfm.startswith('V'):
+            # Use enough blocks to fill ~6144 bytes
+            max_rec = lrecl + 4
+            n = max(1, 6144 // max_rec)
+            return n * max_rec
+        # FB/FS: ~3200 bytes aligned to lrecl
+        n = max(1, 3200 // lrecl)
+        return n * lrecl
+
+    # -- Text-to-EBCDIC encoder ---------------------------------------- #
+
+    def _xmi_text_to_ebcdic(self, text_bytes, lrecl):
+        '''Split UTF-8 *text_bytes* into fixed-length EBCDIC records.
+
+        Each record is padded / truncated to *lrecl* bytes.
+        Returns raw bytes (concatenated fixed-length records).
+        '''
+        space = b'\x40'  # EBCDIC space
+        lines = text_bytes.replace(b'\r\n', b'\n').replace(b'\r', b'\n').split(b'\n')
+        # Drop trailing empty line that split() produces when text ends with \n
+        if lines and lines[-1] == b'':
+            lines = lines[:-1]
+        out = bytearray()
+        for line in lines:
+            try:
+                ebcdic_line = line.decode('utf-8').encode(self.ebcdic)
+            except (UnicodeDecodeError, UnicodeEncodeError):
+                ebcdic_line = line  # keep raw bytes if conversion fails
+            # Pad / truncate to lrecl
+            if len(ebcdic_line) >= lrecl:
+                out += ebcdic_line[:lrecl]
+            else:
+                out += ebcdic_line + space * (lrecl - len(ebcdic_line))
+        return bytes(out)
+
+    def _xmi_encode_input(self, file_bytes, lrecl, recfm):
+        '''Return raw EBCDIC bytes for *file_bytes* as FB/VB/... records.
+
+        For FB/F: text is converted to fixed EBCDIC records.
+        For VB/V: text is converted and each record wrapped with RDW.
+        For U/binary: file_bytes returned as-is (no conversion).
+        '''
+        recfm = recfm.upper()
+        if recfm.startswith('U'):
+            return file_bytes
+
+        # Try to decode as UTF-8 text; fall back to binary pass-through
+        try:
+            _ = file_bytes.decode('utf-8')
+            is_text = True
+        except UnicodeDecodeError:
+            is_text = False
+
+        if not is_text:
+            return file_bytes
+
+        if recfm.startswith('F'):
+            return self._xmi_text_to_ebcdic(file_bytes, lrecl)
+
+        # VB / V: build variable-length records with RDW (4-byte header)
+        space = b'\x40'
+        lines = file_bytes.replace(b'\r\n', b'\n').replace(b'\r', b'\n').split(b'\n')
+        if lines and lines[-1] == b'':
+            lines = lines[:-1]
+        out = bytearray()
+        for line in lines:
+            try:
+                ebcdic_line = line.decode('utf-8').encode(self.ebcdic)
+            except (UnicodeDecodeError, UnicodeEncodeError):
+                ebcdic_line = line
+            if len(ebcdic_line) > lrecl:
+                ebcdic_line = ebcdic_line[:lrecl]
+            rdw_len = len(ebcdic_line) + 4
+            out += struct.pack('>HH', rdw_len, 0) + ebcdic_line
+        return bytes(out)
+
+    # -- Control record builders ---------------------------------------- #
+
+    def _xmi_inmr01(self, from_user, from_node, to_user, to_node):
+        '''Build INMR01 control record bytes.'''
+        import datetime
+        now = datetime.datetime.utcnow()
+        timestamp = now.strftime('%Y%m%d%H%M%S').encode(self.ebcdic)
+
+        def _enc(s, maxlen):
+            return s.upper()[:maxlen].encode(self.ebcdic)
+
+        tu = (
+            self._xmi_tu(0x0042, b'\x50') +              # INMLRECL (required constant in INMR01)
+            self._xmi_tu(0x1011, _enc(from_node, 8)) +  # INMFNODE
+            self._xmi_tu(0x1012, _enc(from_user, 8)) +  # INMFUID
+            self._xmi_tu(0x1001, _enc(to_node, 8)) +    # INMTNODE
+            self._xmi_tu(0x1002, _enc(to_user, 8)) +    # INMTUID
+            self._xmi_tu(0x1024, timestamp) +            # INMFTIME
+            self._xmi_tu(0x102F, struct.pack('>B', 1))  # INMNUMF = 1
+        )
+        return self._xmi_ctrl_seg('INMR01', tu)
+
+    def _xmi_inmr02_seq(self, dsn, lrecl, recfm, data_len):
+        '''Build INMR02 for a sequential dataset (utility=INMCOPY).'''
+        blksize = self._xmi_blksize(lrecl, recfm)
+        recfm_bytes = self._xmi_recfm_byte(recfm)
+        dsorg = b'\x40\x00'  # PS
+
+        tu = (
+            self._xmi_tu(0x1028, 'INMCOPY'.encode(self.ebcdic)) +       # INMUTILN
+            self._xmi_tu(0x102C, struct.pack('>I', data_len)) +         # INMSIZE
+            self._xmi_tu(0x003C, dsorg) +                               # INMDSORG
+            self._xmi_tu(0x0042, struct.pack('>I', lrecl)) +            # INMLRECL
+            self._xmi_tu(0x0030, struct.pack('>I', blksize)) +          # INMBLKSZ
+            self._xmi_tu(0x0049, recfm_bytes) +                         # INMRECFM
+            self._xmi_dsn_tu(dsn)                                       # INMDSNAM
+        )
+        return self._xmi_ctrl_seg('INMR02', tu, numfiles=1)
+
+    def _xmi_inmr02_pds(self, dsn, lrecl, recfm, num_members, inmsize=0):
+        '''Build the two INMR02 records needed for a PDS XMI.
+
+        First:  IEBCOPY record (describes the PDS structure).
+        Second: INMCOPY record (transport layer).
+        *inmsize*: total byte count of the IEBCOPY data stream.
+        '''
+        blksize = self._xmi_blksize(lrecl, recfm)
+        recfm_bytes = self._xmi_recfm_byte(recfm)
+        dsorg_po = b'\x02\x00'   # PO
+        dsorg_ps = b'\x40\x00'   # PS (for INMCOPY wrapper)
+
+        # Number of directory blocks: at least ceil(members / 5)
+        dir_blocks = max(1, (num_members + 4) // 5)
+
+        # First INMR02: IEBCOPY
+        tu1 = (
+            self._xmi_tu(0x1028, 'IEBCOPY'.encode(self.ebcdic)) +      # INMUTILN
+            self._xmi_tu(0x102C, struct.pack('>I', inmsize)) +         # INMSIZE
+            self._xmi_tu(0x003C, dsorg_po) +                           # INMDSORG
+            self._xmi_tu(0x8012, b'\x00') +                            # INMTYPE
+            self._xmi_tu(0x0042, struct.pack('>I', lrecl)) +           # INMLRECL
+            self._xmi_tu(0x0030, struct.pack('>I', blksize)) +         # INMBLKSZ
+            self._xmi_tu(0x0049, recfm_bytes) +                        # INMRECFM
+            self._xmi_tu(0x000C, struct.pack('>I', dir_blocks)[1:]) +  # INMDIR (3 bytes)
+            self._xmi_dsn_tu(dsn)                                      # INMDSNAM
+        )
+        # Second INMR02: INMCOPY (transport)
+        # LRECL/BLKSIZE are fixed transport values (not dataset values)
+        tu2 = (
+            self._xmi_tu(0x1028, 'INMCOPY'.encode(self.ebcdic)) +      # INMUTILN
+            self._xmi_tu(0x102C, struct.pack('>I', inmsize)) +         # INMSIZE
+            self._xmi_tu(0x003C, dsorg_ps) +                           # INMDSORG
+            self._xmi_tu(0x0042, struct.pack('>I', 3216)) +            # INMLRECL (transport)
+            self._xmi_tu(0x0030, struct.pack('>I', 3220)) +            # INMBLKSZ (transport)
+            self._xmi_tu(0x0049, b'\x48\x02')                          # INMRECFM (VS)
+        )
+        return (self._xmi_ctrl_seg('INMR02', tu1, numfiles=1) +
+                self._xmi_ctrl_seg('INMR02', tu2, numfiles=1))
+
+    def _xmi_inmr03(self, lrecl, inmsize=0):
+        '''Build INMR03 control record.'''
+        dsorg = b'\x40\x00'  # PS
+
+        tu = (
+            self._xmi_tu(0x102C, struct.pack('>I', inmsize)) +    # INMSIZE
+            self._xmi_tu(0x003C, dsorg) +                         # INMDSORG
+            self._xmi_tu(0x0042, struct.pack('>H', lrecl)) +      # INMLRECL (2 bytes)
+            self._xmi_tu(0x0049, b'\x00\x01')                     # INMRECFM
+        )
+        return self._xmi_ctrl_seg('INMR03', tu)
+
+    def _xmi_inmr06(self):
+        '''Build INMR06 (end-of-transmission) control record.'''
+        return self._xmi_ctrl_seg('INMR06', b'')
+
+    # -- IEBCOPY data block builders ------------------------------------ #
+
+    def _xmi_copyr1(self, lrecl, recfm, blksize):
+        '''Build the 56-byte COPYR1 block.'''
+        recfm_byte = self._xmi_recfm_byte(recfm)[0]
+        rec = bytearray(56)
+        # Eyecatcher at bytes 1-3 (offset 1)
+        rec[1] = 0xCA
+        rec[2] = 0x6D
+        rec[3] = 0x0F
+        # DS1DSORG at offset 4: PO = 0x0200
+        struct.pack_into('>H', rec, 4, 0x0200)
+        # DS1BLKL at offset 6
+        struct.pack_into('>H', rec, 6, blksize)
+        # DS1LRECL at offset 8
+        struct.pack_into('>H', rec, 8, lrecl)
+        # DS1RECFM at offset 10
+        rec[10] = recfm_byte
+        # file_tape_blocksize at offset 14 = INMCOPY transport blocksize (3220)
+        struct.pack_into('>H', rec, 14, 3220)
+        return bytes(rec)
+
+    def _xmi_copyr2(self):
+        '''Return the 276-byte COPYR2 block.
+
+        Byte 0 must be 0x01 (DEB version indicator) for IEBCOPY to accept
+        the file.  The remaining 275 bytes are zeros (no disk extent info).
+        '''
+        rec = bytearray(276)
+        rec[0] = 0x01
+        return bytes(rec)
+
+    def _xmi_directory_block(self, members):
+        '''Build one 276-byte PDS directory block for *members*.
+
+        *members* is a list of (name_str, ttr_int, ispf_bytes_or_None) triples,
+        at most 5 per block when ISPF stats are included (42 bytes/entry) or
+        8 per block without stats (12 bytes/entry).
+
+        Layout (276 bytes total):
+          bytes  0- 7: key area (zeroes)
+          bytes  8- 9: key_len = 8
+          bytes 10-11: data_len = 256 (0x0100)
+          bytes 12-19: last-referenced-member (zeroes)
+          bytes 20-21: used_length = entries + sentinel + 2 (the +2 includes itself)
+          bytes 22+  : directory entries then end-of-directory sentinel
+          remainder  : zero-padded to 276 bytes
+
+        Each entry: 8-byte EBCDIC name + 3-byte TTR + 1-byte C-byte
+                    [+ user-data halfwords if C-byte & 0x1F != 0]
+        ISPF stats are 30 bytes (C-byte lower 5 bits = 0x0F = 15 halfwords).
+        '''
+        entries = bytearray()
+        for name, ttr, ispf in members:
+            ebcdic_name = name.upper()[:8].encode(self.ebcdic).ljust(8, b'\x40')
+            ttr_bytes = struct.pack('>I', ttr)[1:]  # 3 bytes big-endian
+            if ispf:
+                # 15 halfwords (30 bytes) of ISPF user data
+                c_byte = bytes([0x0F])
+                entries += ebcdic_name + ttr_bytes + c_byte + ispf
+            else:
+                c_byte = b'\x00'
+                entries += ebcdic_name + ttr_bytes + c_byte
+
+        # End-of-directory sentinel: 0xFF * 8 + 3-byte TTR(0) + C-byte(0)
+        sentinel = b'\xff' * 8 + b'\x00\x00\x00\x00'
+
+        # used_length includes itself (the +2)
+        used_length = len(entries) + len(sentinel) + 2
+
+        # 12-byte IEBCOPY sub-block header: flag=0x08 (directory), TTR=0,
+        # key_len=8, data_len=256
+        iebcopy_hdr = (
+            b'\x08' +           # flag: directory block
+            b'\x00' * 5 +       # zeros
+            b'\x00\x00\x00' +   # TTR = 0 for directory
+            b'\x08' +           # key_len = 8
+            b'\x01\x00'         # data_len = 256
+        )
+
+        # 8-byte PDS key: 0xFF*8 marks last/only directory block
+        pds_key = b'\xff' * 8
+
+        # 256-byte PDS data: used_length + entries + sentinel + zero-padding
+        pds_data = struct.pack('>H', used_length) + bytes(entries) + bytes(sentinel)
+        pds_data = pds_data.ljust(256, b'\x00')[:256]
+
+        dir_block = iebcopy_hdr + pds_key + pds_data  # 12 + 8 + 256 = 276 bytes
+
+        # Separate 12-byte directory EOM record (flag=0x88)
+        dir_eom = b'\x88' + b'\x00' * 11
+
+        return dir_block, dir_eom
+
+    def _xmi_member_block(self, name, data_bytes, ttr, blksize=3200, recfm='FB'):
+        '''Build a list of IEBCOPY member data sub-block records.
+
+        Each sub-block record is a separate XMI logical data record.
+        Non-last sub-blocks: 12-byte header + up to *blksize* bytes of data.
+        Last sub-block:      12-byte header + remaining data + 12-byte EOM header.
+
+        For VB data, splits on RDW record boundaries rather than arbitrary offsets.
+        Returns a list of byte strings (one per XMI data record).
+        '''
+        ttr_bytes = struct.pack('>I', ttr)[1:]  # 3 bytes big-endian
+
+        def _hdr(flag, data_len):
+            return (bytes([flag]) +
+                    b'\x00' * 5 +
+                    ttr_bytes +
+                    b'\x00' +
+                    struct.pack('>H', data_len))
+
+        eom = _hdr(0x80, 0)  # member EOM: flag=0x80, data_len=0
+        records = []
+
+        if not data_bytes:
+            records.append(eom)
+            return records
+
+        recfm_upper = recfm.upper()
+        if recfm_upper.startswith('V'):
+            # VB/VS: split on RDW boundaries so sub-blocks hold complete records
+            cur = bytearray()
+            off = 0
+            while off + 4 <= len(data_bytes):
+                rdw = struct.unpack('>H', data_bytes[off:off + 2])[0]
+                if rdw < 4:
+                    break
+                rec_bytes = data_bytes[off:off + rdw]
+                if cur and len(cur) + rdw > blksize:
+                    records.append(_hdr(0x00, len(cur)) + bytes(cur))
+                    cur = bytearray()
+                cur += rec_bytes
+                off += rdw
+            if cur:
+                records.append(_hdr(0x00, len(cur)) + bytes(cur))
+            records.append(eom)
+        else:
+            # FB/FS: split on blksize byte boundaries
+            offset = 0
+            while offset < len(data_bytes):
+                chunk = data_bytes[offset:offset + blksize]
+                offset += len(chunk)
+                records.append(_hdr(0x00, len(chunk)) + chunk)
+            records.append(eom)  # EOM as separate record
+
+        return records
+
+    def _xmi_build_iebcopy(self, members_data, lrecl, recfm, userid=None):
+        '''Build a list of IEBCOPY logical blocks for *members_data*.
+
+        *members_data*: list of (name_str, file_bytes) tuples.
+        *userid*: if provided, ISPF statistics are written into each
+                  directory entry with the current system date/time,
+                  line count, and this userid.
+        Returns a list of byte strings, each to be written as a separate
+        XMI logical data record (wrapped with _xmi_data_record).
+
+        Order: COPYR1, COPYR2, directory block(s), member block(s).
+        '''
+        import datetime as _dt
+
+        blksize = self._xmi_blksize(lrecl, recfm)
+        now = _dt.datetime.now()
+
+        blocks = []
+        blocks.append(self._xmi_copyr1(lrecl, recfm, blksize))
+        blocks.append(self._xmi_copyr2())
+
+        # Assign sequential TTRs starting at 1; pre-encode data so we can
+        # count lines for ISPF stats before building the directory.
+        ttr_map = []
+        for i, (name, raw) in enumerate(members_data):
+            ebcdic_data = self._xmi_encode_input(raw, lrecl, recfm)
+            recfm_upper = recfm.upper()
+            if recfm_upper.startswith('V'):
+                # Count RDW-prefixed records
+                off, num_lines = 0, 0
+                while off + 4 <= len(ebcdic_data):
+                    rdw = struct.unpack('>H', ebcdic_data[off:off + 2])[0]
+                    if rdw < 4:
+                        break
+                    num_lines += 1
+                    off += rdw
+            else:
+                num_lines = len(ebcdic_data) // lrecl if lrecl else 0
+
+            ispf = (self._xmi_ispf_stats(userid, num_lines, now)
+                    if userid else None)
+            ttr_map.append((name, i + 1, ebcdic_data, ispf))
+
+        # Directory block(s) — max 5 entries/block with ISPF (42 bytes each),
+        # or 8 without (12 bytes each). Use 5 as safe limit with ISPF.
+        chunk_size = 5 if userid else 8
+        dir_entries = [(name, ttr, ispf) for name, ttr, _, ispf in ttr_map]
+        for i in range(0, len(dir_entries), chunk_size):
+            dir_block, dir_eom = self._xmi_directory_block(dir_entries[i:i + chunk_size])
+            blocks.append(dir_block)
+            blocks.append(dir_eom)
+
+        # Member blocks - each sub-block is a separate XMI data record
+        for name, ttr, ebcdic_data, _ in ttr_map:
+            for sub_block in self._xmi_member_block(name, ebcdic_data, ttr,
+                                                    blksize=blksize, recfm=recfm):
+                blocks.append(sub_block)
+
+        return blocks
+
+    # -- Top-level builders --------------------------------------------- #
+
+    def _build_seq_xmi(self, file_path, dsn=None, lrecl=80, recfm='FB',
+                       from_user='PYTHON', from_node='LOCAL',
+                       to_user='PYTHON', to_node='LOCAL'):
+        '''Build a sequential dataset XMI from a single file.'''
+        raw = Path(file_path).read_bytes()
+        ebcdic_data = self._xmi_encode_input(raw, lrecl, recfm)
+
+        if dsn is None:
+            dsn = Path(file_path).stem.upper()
+
+        out = bytearray()
+        out += self._xmi_inmr01(from_user, from_node, to_user, to_node)
+        out += self._xmi_inmr02_seq(dsn, lrecl, recfm, len(ebcdic_data))
+        out += self._xmi_inmr03(lrecl, inmsize=len(ebcdic_data))
+        out += self._xmi_data_record(ebcdic_data)
+        out += self._xmi_inmr06()
+        return bytes(out)
+
+    def _build_pds_xmi(self, folder_path, dsn=None, lrecl=80, recfm='FB',
+                       from_user='PYTHON', from_node='LOCAL',
+                       to_user='PYTHON', to_node='LOCAL',
+                       userid=None):
+        '''Build a PDS XMI from a folder (one level deep).'''
+        folder = Path(folder_path)
+        members_data = []
+        for f in sorted(folder.iterdir()):
+            if f.is_file():
+                name = f.stem.upper()[:8]
+                members_data.append((name, f.read_bytes()))
+
+        if not members_data:
+            raise ValueError("Folder contains no files: {}".format(folder_path))
+
+        if dsn is None:
+            dsn = folder.name.upper()
+
+        iebcopy_blocks = self._xmi_build_iebcopy(members_data, lrecl, recfm,
+                                                  userid=userid)
+        inmsize = sum(len(b) for b in iebcopy_blocks)
+
+        out = bytearray()
+        out += self._xmi_inmr01(from_user, from_node, to_user, to_node)
+        out += self._xmi_inmr02_pds(dsn, lrecl, recfm, len(members_data),
+                                    inmsize=inmsize)
+        out += self._xmi_inmr03(lrecl, inmsize=inmsize)
+        for block in iebcopy_blocks:
+            out += self._xmi_data_record(block)
+        out += self._xmi_inmr06()
+        return bytes(out)
 
 
 if __name__ == "__main__":
