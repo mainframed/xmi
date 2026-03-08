@@ -5,14 +5,7 @@
 
 cd "$(dirname "$0")"
 
-echo "Testing XMI files"
-for i in *.xmi; do echo "python3 ../xmi/__init__.py $i";python3 ../xmi/__init__.py $i; done
+# echo "Testing file parsing (XMI / AWS / HET) and creation"
+python3 -m unittest discover -s . -p "test_*.py" -v
 
-echo "Testing AWS files"
-for i in *.aws; do echo "python3 ../xmi/__init__.py $i";python3 ../xmi/__init__.py $i; done
 
-echo "Testing HET files"
-for i in *.het; do echo "python3 ../xmi/__init__.py $i";python3 ../xmi/__init__.py $i; done
-
-echo "Testing XMI round-trip (create + extract)"
-python3 -m unittest test_roundtrip -v
