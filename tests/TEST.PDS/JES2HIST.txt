@@ -1,0 +1,83 @@
+History of JES2- by Jack Schudel
+
+In the mid-1960's a small group of IBM employees working at the Manned
+Spacecraft Center in Houston worked on a program called HASP (please
+see next section for "How HASP got its name") which eventually was made
+available as an FDP.  Its popularity and use expanded such that by
+February 1971 IBM released HASP II Version 3.0 as a Type III product
+with Class A support.  This HASP ran as an optional extension to
+OS/MVT, performing the peripheral functions associated with job
+processing.  In March of 1973 IBM released the SVS (i.e. OS/VS2 Release
+1) operating system using a new version of HASP referred to as Version
+4.0 HASP II Version 4.0 was not a System Control Program (SCP).  It was
+still optionally available to replace OS/VS2 Release 1 readers and
+writers and continued to be a Class A service.  With the availability
+of OS/VS2 Release 2 (MVS), HASP's name was changed to JES2.
+
+JES2 now runs as an operator started task in its own address space,
+providing I/O spooling for local and remote unit record devices. Unlike
+its predecessor, HASP, JES2 is an integral part of the SCP, and
+receives the appropriate service support.  In 1978 IBM Further enhanced
+the JES2 product with the announcement of Network Job Entry (NJE).
+
+How HASP got its name
+
+Although HASP, and its successor, JES2, are well known and widely used,
+few people know the origins of the name.  If you were to ask the
+hundreds of HASP fans, recognizable at SHARE by their many orange
+talismans, most would not know.  A few would give the wrong, IBM
+perpetuated answer.
+
+For the truth we must go back to the mid 1960's.  IBM's OS/360 was in
+trouble.  The spooling (wonder where that name came from) support was
+slow and the overhead was high. Many programming groups independently
+attacked the problem.  ASP, loosely based upon the tightly coupled IBM
+7090/7094 DCS, held the lead in the OS/360 spooling sweepstakes. ASP's
+need for at least two CPU's fit well with IBM Marketing's plans for the
+System/360. Meanwhile, a group of IBM SE's, located in Houston,
+developed a different product of which they were justifiably proud.
+They wanted to popularize it, as they correctly suspected it would be
+the balm for OS/360 users, increasing the usability and popularity of
+the operating system, and, not incidentally, furthering their careers.
+All they needed was the right name] A name which was easy to remember,
+a name which would draw attention to their product, and a name to
+distract from the ASP publicity.  That name was Half-ASP, or HASP.
+Naturally, if HASP and ASP were products of two different companies,
+the FTC would have stepped in to stop such a predatory product name.
+Regulatory action was prevented, however, because IBM is "one big happy
+family", believed by many to be larger than the Government.
+
+The new HASP erased some of ASP's publicity lead and capitalized on the
+rest.  Because the "H" sound is nearly silent in English, no discussion
+of spooling systems for OS/360 could be carried on without mention of
+both products.  HASP adherents quickly discovered that a picture of a
+hasp could symbolize their product's security and confidence.  Further,
+the ASP people were opposed to begin using a poisonous viper for their
+logo.
+
+Where, then, did the wrong answer come from?  IBM could not live with
+Half-ASP, so their name calling department went to work and came up
+with:  Houston Automatic Spooling Priority System (HASPS).  Close
+enough for IBM work. Why Orange?
+
+Many users of HASP and JES2 are well aware that the color ORANGE seems
+to predominate our product, but few are aware of its origins.  Some
+have proposed that it is a reference to the citrus fruit in order to
+avoid the other citrus fruit connotation of LEMON. But this is NOT
+true. Others have suggested the color was picked as a challenge for
+those writing songs for the Sing-Along because there are only two known
+words that rhyme with Orange.  (It is left as an exercise to the reader
+to find them.)  But this also is not true.  What is even worse is that
+some jealous ASP (or JES3) users have joked that Orange is one half of
+a halloween prank.  Of course that is definitely not the reason for our
+use of the color Orange.
+
+The truth of the matter is that HASP was written by Tom Simpson in 1964
+while he was working for IBM at the Manned Space Craft Center in
+Houston.  Bob Crabtree and Dick Hitt were also involved in the original
+package that was released as the FDP.  When Tom came to his first SHARE
+meeting he always carried and signed things with an Orange pen.  The
+reason he did this had nothing to do with HASP at that time, it was
+because is alma mater's colors (University of Texas) were Orange and
+White.  Since Tom was "Mr. HASP", it did not take long for people to
+start associating Orange with HASP.
