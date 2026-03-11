@@ -48,6 +48,25 @@ or just::
 
     print(xmi_obj.get_message())  # Prints 'None' if no message
 
+Creating XMI mainframe files (datasets)::
+
+    from xmi import create_xmi 
+
+    create_xmi(
+        '/path/to/file/or/folder',
+        output_file='/path/to/your/XMI',
+        dsn='MY.DS',
+        from_user='DADE',
+        from_node='PYTHON'
+    )
+
+
+This will create a XMI file at `/path/to/your/XMI` that is 'receivable' on z/OS.
+If the `/path/to/file/or/folder`  is a folder it will be stored in the XMI as 
+as PDS named `MY.DS`. If it's a single file it will be stored in the XMI as
+a sequential file called `MY.DS`. If you omit the `dsn` the datasetname 
+inside the XMIT will be `folder` (last part of input) in UPPERCASE.
+
 If you you're having problems with the library or want to see whats happening
 behind the scenes you can enable debugging::
 
