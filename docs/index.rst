@@ -3,7 +3,9 @@ xmi
 
 xmi is a python library developed to handle NETDATA (XMI) and virtual
 tape files (AWS and HET). It was developed to open and extract (unload)
-XMI/AWS/HET mainframe files.
+XMI/AWS/HET mainframe files. Recent updates have added the capability to 
+generate XMI files from Python. Source can be a single level folder or
+a single file.
 
 Overview
 ------------------

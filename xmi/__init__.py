@@ -46,8 +46,8 @@ xmi Python Library
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-__version__ = '0.5.9'
-__author__ = 'Philip Young'
+__version__ = '0.6.0'
+__author__ = 'Philip Young, Henri Kuiper'
 __license__ = "GPL"
 
 __xmi_version__ = __version__
