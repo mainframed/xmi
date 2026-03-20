@@ -32,7 +32,7 @@ setup(
     long_description=README,
     long_description_content_type="text/markdown",
     url="https://github.com/mainframed/xmi/",
-    author="Philip Young",
+    author="Philip Young, Henri Kuiper",
     author_email="mainframed767@gmail.com",
     license="GPLv2",
     classifiers=[
@@ -44,6 +44,12 @@ setup(
     install_requires=[
         "ebcdic","prettytable","python-magic"
     ],
+    entry_points={
+        'console_scripts': [
+            'extractxmi=xmi.cli:extract_main',
+            'createxmi=xmi.cli:create_main',
+        ],
+    },
     project_urls={
         "Bug Tracker": "https://github.com/mainframed/xmi/issues",
     },

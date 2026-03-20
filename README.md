@@ -79,6 +79,32 @@ xmi_obj = xmi.XMIT(filename="/path/to/file.xmi",loglevel=logging.DEBUG)
 xmi_obj.open()
 ```
 
+## Command-line tools
+
+After `pip install xmi-reader` two commands are available in your PATH.
+
+**`extractxmi`** — open, list and extract XMI / AWS / HET files:
+
+```bash
+extractxmi -l FILE.XMI                        # list contents
+extractxmi FILE.XMI                           # extract everything
+extractxmi FILE.XMI "MY.PDS(MEMBER)"          # extract one member
+extractxmi -pH FILE.XMI                       # print detailed metadata
+extractxmi FILE.XMI --outputdir /tmp/out/     # extract to a folder
+extractxmi --help                             # full option list
+```
+
+**`createxmi`** — create an XMI file from a local file or folder:
+
+```bash
+createxmi myfolder/                                       # folder → PDS XMI
+createxmi myfolder/ -o MY.XMI --dsn MY.PDS               # set output & DSN
+createxmi myfolder/ -o MY.XMI --from-user IBMUSER        # set ISPF owner
+createxmi myfile.jcl -o SEQ.XMI --dsn MY.SEQ             # file → sequential XMI
+createxmi xmi_folder/ -o MULTI.XMI --dsn MULTI.PDS       # XMI-in-XMI container
+createxmi --help                                          # full option list
+```
+
 ## More Information
 
 - [Documentation](https://xmi.readthedocs.io/)

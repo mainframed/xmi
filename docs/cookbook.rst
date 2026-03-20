@@ -78,4 +78,56 @@ behind the scenes you can enable debugging::
 
 As you can see, using this library is fairly easy.
 
+Command-line tools
+==================
 
+After installation two commands are available from the terminal.
+
+``extractxmi`` — open, list, and extract XMI / AWS / HET files
+---------------------------------------------------------------
+
+.. code-block:: bash
+
+    # List all datasets and members
+    extractxmi -l FILE.XMI
+
+    # Extract everything to the current directory
+    extractxmi FILE.XMI
+
+    # Extract a single PDS member
+    extractxmi FILE.XMI "MY.PDS(MEMBER)"
+
+    # Print detailed metadata
+    extractxmi -pH FILE.XMI
+
+    # Extract to a specific folder
+    extractxmi FILE.XMI --outputdir /tmp/out/
+
+    # Print the embedded message (if any)
+    extractxmi --message FILE.XMI
+
+    # Full option list
+    extractxmi --help
+
+``createxmi`` — create an XMI file from a local file or folder
+--------------------------------------------------------------
+
+.. code-block:: bash
+
+    # Package a folder as a PDS (dataset name defaults to folder name)
+    createxmi myfolder/
+
+    # Specify output path and dataset name
+    createxmi myfolder/ -o MY.XMI --dsn MY.PDS
+
+    # Set originating user (appears in ISPF statistics on z/OS)
+    createxmi myfolder/ -o MY.XMI --dsn MY.PDS --from-user IBMUSER
+
+    # Package a single file as a sequential dataset
+    createxmi myfile.jcl -o SEQ.XMI --dsn MY.SEQ
+
+    # Package XMI files inside a PDS (auto-detects binary, uses RECFM=U)
+    createxmi xmi_folder/ -o MULTI.XMI --dsn MULTI.PDS
+
+    # Full option list
+    createxmi --help
