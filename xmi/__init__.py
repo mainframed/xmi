@@ -1764,10 +1764,11 @@ class XMIT:
         text units which contains metadata about the record.
         '''
         self.logger.debug("Parsing XMIT file")
-        if not self.xmit_object and self.file_object:
-            self.xmit_object = self.file_object
-        else:
-            self.read_xmit_file()
+        if not self.xmit_object:
+            if self.file_object:
+                self.xmit_object = self.file_object
+            else:
+                self.read_xmit_file()
         self.xmit = {}
 
         # Get XMI header
@@ -3150,6 +3151,8 @@ class XMIT:
     def _xmi_blksize(self, lrecl, recfm):
         '''Calculate a sensible blocksize for IEBCOPY.'''
         recfm = recfm.upper()
+        if recfm.startswith('U'):
+            return 6233  # standard safe max block size for RECFM=U
         if recfm.startswith('V'):
             # Use enough blocks to fill ~6144 bytes
             max_rec = lrecl + 4
@@ -3495,7 +3498,10 @@ class XMIT:
         for i, (name, raw) in enumerate(members_data):
             ebcdic_data = self._xmi_encode_input(raw, lrecl, recfm)
             recfm_upper = recfm.upper()
-            if recfm_upper.startswith('V'):
+            if recfm_upper.startswith('U'):
+                # Binary passthrough — line count is meaningless
+                num_lines = 0
+            elif recfm_upper.startswith('V'):
                 # Count RDW-prefixed records
                 off, num_lines = 0, 0
                 while off + 4 <= len(ebcdic_data):
@@ -3562,6 +3568,24 @@ class XMIT:
 
         if dsn is None:
             dsn = folder.name.upper()
+
+        # Auto-detect: if EVERY member is binary (cannot be decoded as UTF-8),
+        # switch to RECFM=U so the content is stored as-is rather than being
+        # mangled into fixed-length EBCDIC records.  A typical case is a folder
+        # of XMI files to be received individually on z/OS.
+        # Mixed folders (text + binary) are left as FB so text members stay
+        # correctly EBCDIC-encoded.
+        if not recfm.upper().startswith('U'):
+            def _is_binary(raw):
+                try:
+                    raw.decode('utf-8')
+                    return False
+                except UnicodeDecodeError:
+                    return True
+
+            if all(_is_binary(raw) for _, raw in members_data):
+                recfm = 'U'
+                lrecl = 0
 
         iebcopy_blocks = self._xmi_build_iebcopy(members_data, lrecl, recfm,
                                                   from_user=from_user)
