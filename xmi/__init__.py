@@ -6,8 +6,8 @@ xmi Python Library
     primarily to transfer files between mainframes. The file consists of
     a dataset "unloaded" with either INMCOPY or IEBCOPY and metadata.
     Multiple control records exist, see https://en.wikipedia.org/wiki/NETDATA
-    for more details. NETDATA and XMIT/XMI are used interchangably however
-    NETDATA files are more commonly refered to as XMI.
+    for more details. NETDATA and XMIT/XMI are used interchangeably however
+    NETDATA files are more commonly referred to as XMI.
 
     The AWSTAPE file format is used to transfer virtual tape files. Originally
     created for P/390 it is used primarily today with virtual tape offerings.
@@ -162,7 +162,7 @@ def open_file(
             https://docs.python.org/3/library/logging.html#levels.
             Defaults to ``logging.WARNING``.
         outputfolder (str): Output file path for extracted files.
-            Detaults to current working directory.
+            Defaults to current working directory.
         encoding (str): EBCDIC codepage used when translating from EBCDIC to
             UTF-8. Defaults to cp1140
         infile (str): folder/file name to use for XMI output instead of the
@@ -170,7 +170,7 @@ def open_file(
         unnum (bool): Some mainframe files have numbers in columns 72-80
             denoting line numbers. If True files converted from EBCDIC
             will have these columns removed. Default to True.
-        quiet (bool): Do not print any output messages whle extracting files.
+        quiet (bool): Do not print any output messages while extracting files.
             Default to False.
         force_convert (bool): Converts all files utf-8 ignoring mimetype.
             Defaults to False.
@@ -281,14 +281,14 @@ class XMIT:
             >>> obj.set_output_folder("/path/to")
             >>> obj.unload_files()
 
-        Load an AWS file and view metatdata JSON::
+        Load an AWS file and view metadata JSON::
 
             >>> from xmilib import XMIT
             >>> obj = XMIT(filename="/path/to/FILE420.AWS")
             >>> obj.open()
             >>> print(obj.get_json())
 
-        Load an XMI file, extract member (aka file) from paritioned
+        Load an XMI file, extract member (aka file) from partitioned
         dataset (i.e PDS aka folder)::
 
             >>> from xmilib import XMIT
@@ -320,7 +320,7 @@ class XMIT:
             https://docs.python.org/3/library/logging.html#levels.
             Defaults to ``loggin.WARNING``.
         outputfolder (str): Output file path for extracted files.
-            Detaults to current working directory.
+            Defaults to current working directory.
         encoding (str): EBCDIC codepage used when translating from EBCDIC to
             UTF-8. Defaults to cp1140
         infile (str): folder/file name to use for XMI output instead of the
@@ -328,7 +328,7 @@ class XMIT:
         unnum (bool): Some mainframe files have numbers in columns 72-80
             denoting line numbers. If True files converted from EBCDIC
             will have these columns removed. Default to True.
-        quiet (bool): Do not print any output messages whle extracting files.
+        quiet (bool): Do not print any output messages while extracting files.
             Default to False.
         force_convert (bool): Converts all files utf-8 ignoring mimetype.
             Defaults to False.
@@ -606,7 +606,7 @@ class XMIT:
         Returns true if a member is an XMI file.
 
         Args:
-            pds (str): partioned dataset name
+            pds (str): partitioned dataset name
             member_name (str): pds member
         '''
         self.check_parsed()
@@ -785,7 +785,7 @@ class XMIT:
         The returned dict contains:
 
             * mimetype (str): the member mimetype
-            * extenstion (str): the member extention based on mimetype
+            * extension (str): the member extension based on mimetype
             * RECFM (str): the member record format
             * LRECL (int): the member line/record length
             * size (int): size of the member
@@ -858,7 +858,7 @@ class XMIT:
         The returned dict contains:
 
             * mimetype (str): the member mimetype
-            * extenstion (str): the member extention based on mimetype
+            * extension (str): the member extension based on mimetype
             * modified (str): output from get_last_modified() in ISO format
             * size (int): output from get_dataset_size()
             * owner (str): output from get_owner()
@@ -890,7 +890,7 @@ class XMIT:
         The returned dict contains the following:
 
             * mimetype (str): the member mimetype
-            * extenstion (str): the member extention based on mimetype
+            * extension (str): the member extension based on mimetype
             * size (int): output from get_dataset_size()
             * owner (str): output from get_owner()
 
@@ -991,7 +991,7 @@ class XMIT:
 
     def get_member_text(self, pds, member):
         '''
-        Returns paritioned dataset member converted to utf-8 based on current
+        Returns partitioned dataset member converted to utf-8 based on current
         codepage (default is cp1141).
 
         Use ``set_codepage()`` to change current code page.
@@ -1080,7 +1080,7 @@ class XMIT:
 
     def is_member(self, pds, member):
         '''
-        Returns true if the member exists in the provided partioned dataset.
+        Returns true if the member exists in the provided partitioned dataset.
         '''
         self.check_parsed()
 
@@ -1303,7 +1303,7 @@ class XMIT:
 
         To check if the file is a virtual tape file it confirms that
         the first record previous bytes header is zero as there cannot be
-        any previous bytes at the beggining of the file.
+        any previous bytes at the beginning of the file.
         '''
 
         self.logger.debug("Checking for 00 00 in bytes 2-4")
@@ -1627,7 +1627,7 @@ class XMIT:
     def get_recfm(self, recfm):
         '''Returns a string of the dataset record format (RECFM).
 
-        RECFM contains file layout information and is cummulative.
+        RECFM contains file layout information and is cumulative.
 
         The first letter is one of F, V, U where:
 
@@ -1834,7 +1834,7 @@ class XMIT:
                         self.xmit['file'][dsn]['data'].append(record_data)
                         record_data = b''
 
-                    self.logger.debug("Location: {:8} Writting {:<3} bytes Flag: 0x80 {:<1} 0x40 {:<1} (Section length: {})".format(loc, write_length, eighty, forty, section_length))
+                    self.logger.debug("Location: {:8} Writing {:<3} bytes Flag: 0x80 {:<1} 0x40 {:<1} (Section length: {})".format(loc, write_length, eighty, forty, section_length))
 
             if 0x20 == (0x20 & flag):
                 self.logger.debug("[flag 0x20] This is (part of) a control record.")
@@ -1862,7 +1862,7 @@ class XMIT:
         # Partitioned datasets are broken up as follows:
         #   * COPYR1 record
         #   * COPYR2 record
-        #   * Member metadata (filnames, file stats, etc)
+        #   * Member metadata (filenames, file stats, etc)
         #   * Files
 
         magi = magic.Magic(mime_encoding=True, mime=True)
@@ -2013,7 +2013,7 @@ class XMIT:
     def parse_INMR04(self, inmr04_record):
         '''Print debug message for INMR04 records.
 
-        INMR04 records are used to pass data to instalation specific exits
+        INMR04 records are used to pass data to installation specific exits
         (i.e. APIs), this function is provided if needed to be overloaded.
         '''
         self.logger.debug("[INMR04]: {}".format(inmr04_record.decode(self.ebcdic)))
@@ -2145,11 +2145,11 @@ class XMIT:
 
             if 0x0200 == (flags & 0x0200):
                 # BZLIB Compression
-                self.logger.debug("Record compresed with BZLIB")
+                self.logger.debug("Record compressed with BZLIB")
                 tape_file += bz2.decompress(self.tape_object[loc + 6:loc + cur_blocksize + 6])
                 current_record = bz2.decompress(self.tape_object[loc + 6:loc + cur_blocksize + 6])
             elif 0x0100 == (flags & 0x0100):
-                self.logger.debug("Record compresed with zLIB")
+                self.logger.debug("Record compressed with zLIB")
                 tape_file += zlib.decompress(self.tape_object[loc + 6:loc + cur_blocksize + 6])
                 current_record = zlib.decompress(self.tape_object[loc + 6:loc + cur_blocksize + 6])
             else:
@@ -2221,21 +2221,21 @@ class XMIT:
 
                 filetype, datatype = magi.from_buffer(tape_file).split('; ')
                 datatype = datatype.split("=")[1]
-                extention = mimetypes.guess_extension(filetype)
+                extension = mimetypes.guess_extension(filetype)
                 # eof_marker = False
 
-                if not extention:
-                    extention = "." + filetype.split("/")[1]
+                if not extension:
+                    extension = "." + filetype.split("/")[1]
 
                 # File magic cant detec XMIT files
                 if ( filetype == 'application/octet-stream'
                    and len(tape_file) >= 8
                    and tape_file[2:8].decode(self.ebcdic) == 'INMR01'):
-                    extention = ".xmi"
+                    extension = ".xmi"
                     filetype = 'application/xmit'
 
                 if self.force:
-                    extention = ".txt"
+                    extension = ".txt"
 
                 if filetype == 'text/plain' or datatype != 'binary' or self.force:
 
@@ -2256,7 +2256,7 @@ class XMIT:
                         'data' : tape_file,
                         'filetype' : filetype,
                         'datatype': datatype,
-                        'extension' : extention,
+                        'extension' : extension,
                         'num' : file_num
                         }
 
@@ -2317,7 +2317,7 @@ class XMIT:
         # Partitioned datasets are broken up as follows:
         #   * COPYR1 record
         #   * COPYR2 record
-        #   * Member metadata (filnames, file stats, etc)
+        #   * Member metadata (filenames, file stats, etc)
         #   * File data itself
         # PDSEs are followed by other fields, PDSE support is tenious as best
         # barring a complete rewrite
@@ -2401,12 +2401,12 @@ class XMIT:
     # __text_units: Process IBM text units and return info
 
     def iebcopy_record_1(self, first_record):
-        '''Returns a dict containing IEBCOPY COPYR1 metatdata
+        '''Returns a dict containing IEBCOPY COPYR1 metadata
 
         More information available here:
         https://www.ibm.com/support/knowledgecenter/SSLTBW_2.2.0/com.ibm.zos.v2r2.idau100/u1322.htm
         '''
-        self.logger.debug("IEBCOPY First Record Atributes (COPYR1)")
+        self.logger.debug("IEBCOPY First Record Attributes (COPYR1)")
         # PDS i.e. IEBCOPY
         if self.__get_int(first_record[1:4]) != 0xCA6D0F and self.__get_int(first_record[9:12]) != 0xCA6D0F:
             self.logger.debug("COPYR1 header eyecatcher 0xCA6D0F not found")
@@ -2477,13 +2477,13 @@ class XMIT:
         return COPYR1
 
     def iebcopy_record_2(self, second_record):
-        '''Returns a dict containing IEBCOPY COPYR2 metatdata
+        '''Returns a dict containing IEBCOPY COPYR2 metadata
 
         More information available here:
         https://www.ibm.com/support/knowledgecenter/SSLTBW_2.2.0/com.ibm.zos.v2r2.idau100/u1322.htm
         '''
 
-        self.logger.debug("IEBCOPY Second Record Atributes (COPYR2)")
+        self.logger.debug("IEBCOPY Second Record Attributes (COPYR2)")
         if len(second_record) > 276:
             self.logger.debug("COPYR2 Length {} longer than 276 records".format(len(second_record)))
             raise Exception("COPYR2 Length {} longer than 276 records".format(len(second_record)))
@@ -2674,7 +2674,7 @@ class XMIT:
 
             if ttr_location + 1 > len(sorted_ttrs):
 
-                self.logger.debug("Encoutered more files than members names: Total members: {} Current file: {}".format(len(ttrs), ttr_location+1))
+                self.logger.debug("Encountered more files than members names: Total members: {} Current file: {}".format(len(ttrs), ttr_location+1))
                 sorted_ttrs.append("??{}".format(deleted_num))
                 ttrs["??{}".format(deleted_num)] = "DELETED??{}".format(deleted_num)
                 member_dict['members'][ "DELETED??{}".format(deleted_num)] = { 'alias' : False}
@@ -2753,7 +2753,7 @@ class XMIT:
         Returns a dict with:
             mimetype (str): file guessed mimetype from libmagic
             datatype (str): either binary, text, etc
-            extension (str): file extention with period (i.e. ".txt")
+            extension (str): file extension with period (i.e. ".txt")
             data (byte): binary file data
             text (str): Is included when force_text is enabled or when the file
             mimetype is determined to be a plain/text file.
@@ -2764,19 +2764,19 @@ class XMIT:
 
         filetype, datatype = magi.from_buffer(file_data).split('; ')
         datatype = datatype.split("=")[1]
-        extention = mimetypes.guess_extension(filetype)
+        extension = mimetypes.guess_extension(filetype)
 
-        if not extention:
-            extention = "." + filetype.split("/")[1]
+        if not extension:
+            extension = "." + filetype.split("/")[1]
 
         if self.force:
-            extention = ".txt"
+            extension = ".txt"
 
         # File magic cant detect XMIT files (yet :D)
         if ( filetype == 'application/octet-stream'
             and len(file_data) >= 8
             and file_data[2:8].decode(self.ebcdic) == 'INMR01'):
-            extention = ".xmi"
+            extension = ".xmi"
             filetype = 'application/xmit'
 
         if filetype == 'text/plain' or datatype != 'binary' or self.force:
@@ -2797,17 +2797,17 @@ class XMIT:
             if self.__is_jcl(
                 mime_dict['text']
             ):
-                extention = '.jcl'
+                extension = '.jcl'
 
             elif self.__is_rexx(
                 mime_dict['text']
             ):
-                extention = '.rexx'
+                extension = '.rexx'
 
-        self.logger.debug("File name: {} Mime Type: {} Datatype: {} File ext: {} Size: {}".format(file_name, filetype, datatype, extention, len(file_data)))
+        self.logger.debug("File name: {} Mime Type: {} Datatype: {} File ext: {} Size: {}".format(file_name, filetype, datatype, extension, len(file_data)))
         mime_dict['mimetype'] = filetype
         mime_dict['datatype'] = datatype
-        mime_dict['extension'] = extention
+        mime_dict['extension'] = extension
         mime_dict['data'] = file_data
 
         return mime_dict
@@ -2841,7 +2841,7 @@ class XMIT:
         the XMIT object to fix them.
         '''
 
-        # Technically they arent circular, TTRs are a pointer to the member
+        # Technically they aren't circular, TTRs are a pointer to the member
         # data kinda like inodes. But are labelled ALIAS so data isn't replicated
         # similar to hard links. But the library needs at least one fixed
         # member so here we are.

@@ -8,15 +8,15 @@ NETDATA files are primarily used to transfer sequential and partitioned
 datasets between mainframe environments, sometimes via non mainframe
 environments. NETDATA is the official name for the file format of the
 output from the z/OS ``TRANSMIT``, z/VM ``NETDATA`` or the opensource
-tool ``XMIT370``. However, it is more often reffered to as an ``XMI`` file.
-This documentation uses XMI and NETDATA interchangably. Typically third
+tool ``XMIT370``. However, it is more often referred to as an ``XMI`` file.
+This documentation uses XMI and NETDATA interchangeably. Typically third
 parties and even IBM will refer to them as XMI files.
 
 .. note::
     Some quick terminology:
 
-    - **Dataset**: a mainframe file, usually refered to as a sequential dataset or seq
-    - **Partitioned dataset**: a mainframe folder usually refered to as a PDS
+    - **Dataset**: a mainframe file, usually referred to as a sequential dataset or seq
+    - **Partitioned dataset**: a mainframe folder usually referred to as a PDS
     - **Member**: files in a partitioned dataset
     - **Unload**: extracting data to be used elsewhere
     - **LRECL**: The record length. This is how long each line in a file is,
@@ -38,7 +38,7 @@ parties and even IBM will refer to them as XMI files.
 
 
 XMI files contain either a sequential dataset or a partitioned dataset, and
-optionally a message. They cannot contain more than one dataset, paritioned
+optionally a message. They cannot contain more than one dataset, partitioned
 or sequential at a time. They can, however, also include an optional message
 which is technically sequential dataset, however the dataset name is lost.
 
@@ -220,7 +220,7 @@ Defines the file format and contains the following text units:
 INRM04 Records
 ~~~~~~~~~~~~~~
 
-INMR04 records are used to pass data to instalation specific exits
+INMR04 records are used to pass data to installation specific exits
 (i.e. APIs).
 
 

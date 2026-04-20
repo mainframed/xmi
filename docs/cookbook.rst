@@ -20,7 +20,7 @@ To list all datasets and dataset members::
         else:
             print(f)
 
-Print JSON metatdata::
+Print JSON metadata::
 
     print(xmi_obj.get_json())
     print(het_obj.get_json(text=True)) # Adds plaintext files to json output
