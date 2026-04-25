@@ -68,17 +68,32 @@ Creating an XMI with an embedded message (displayed on the z/OS terminal on ``RE
         output_file='/path/to/your/XMI',
         dsn='MY.DS',
         message='Hello from Python!\nSee release notes inside.',
-        message_format='80x32',  # or '132x27' for wide (Model 5) terminals
     )
 
-The message can also be read from a text file — useful for multi-line banners or EBCDIC art::
+``message_format`` controls the terminal width and maximum line count.
+The default is ``'80x32'`` (80 columns, 32 lines — suits a standard Model 3/4
+terminal).  Use ``'132x27'`` for wide terminals (Model 5, 132 columns, 27 lines)::
+
+    create_xmi(
+        '/path/to/file/or/folder',
+        output_file='/path/to/your/XMI',
+        dsn='MY.DS',
+        message='Wide banner line spanning 132 columns.',
+        message_format='132x27',
+    )
+
+Lines longer than the column limit are silently truncated; messages longer than
+the line limit are also truncated — both emit a warning to stderr.
+
+The message can also be read from a UTF-8 text file — useful for multi-line
+banners::
 
     create_xmi(
         '/path/to/file/or/folder',
         output_file='/path/to/your/XMI',
         dsn='MY.DS',
         message_file='/path/to/banner.txt',
-        message_format='80x32',
+        # message_format defaults to '80x32'; pass '132x27' for wide terminals
     )
 
 This will create a XMI file at `/path/to/your/XMI` that is 'receivable' on z/OS.
