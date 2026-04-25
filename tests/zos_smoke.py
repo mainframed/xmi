@@ -118,8 +118,10 @@ def verify_xmis(xmis: dict[str, bytes], work_dir: Path) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def upload_to_zos(xmis: dict[str, bytes], host: str, hlq: str) -> None:
-    user = input(f'\nz/OS FTP username [{host}] (default IBMUSER): ').strip() or 'IBMUSER'
-    password = getpass.getpass('z/OS FTP password: ')
+    host = input(f'\nz/OS FTP host [{host}]: ').strip() or host
+    hlq  = input(f'Dataset HLQ   [{hlq}]: ').strip() or hlq
+    user = input(f'Username      [IBMUSER]: ').strip() or 'IBMUSER'
+    password = getpass.getpass('Password: ')
 
     print(f'\nConnecting to {host}...')
     ftp = ftplib.FTP(host, timeout=30)
