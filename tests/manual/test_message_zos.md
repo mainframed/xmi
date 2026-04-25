@@ -10,12 +10,13 @@ when receiving the XMI via TSO `RECEIVE`.
 The script `tests/zos_smoke.py` builds all four XMI variants, verifies them
 with the local parser, and optionally uploads them to z/OS via FTP.
 
-| Dataset suffix | Content | Has message |
-|---|---|---|
-| `XMI1M` | Sequential file | Yes |
-| `XMI1`  | Sequential file | No  |
-| `XMIPM` | PDS (2 members) | Yes |
-| `XMIP`  | PDS (2 members) | No  |
+| Dataset suffix | Content | Has message | Format |
+|---|---|---|---|
+| `XMI1M` | Sequential file | Yes | 80×32  |
+| `XMI1`  | Sequential file | No  | —      |
+| `XMIPM` | PDS (2 members) | Yes | 80×32  |
+| `XMIP`  | PDS (2 members) | No  | —      |
+| `XMI1W` | Sequential file | Yes | 132×27 |
 
 ### Prerequisites — allocate target datasets on z/OS
 
@@ -30,6 +31,7 @@ ALLOC DA('IBMUSER.XMILIB.XMI1M') NEW CATALOG SPACE(1,1) TRACKS RECFM(F,B) LRECL(
 ALLOC DA('IBMUSER.XMILIB.XMI1')  NEW CATALOG SPACE(1,1) TRACKS RECFM(F,B) LRECL(80) BLKSIZE(3120) UNIT(SYSDA)
 ALLOC DA('IBMUSER.XMILIB.XMIPM') NEW CATALOG SPACE(1,1) TRACKS RECFM(F,B) LRECL(80) BLKSIZE(3120) UNIT(SYSDA)
 ALLOC DA('IBMUSER.XMILIB.XMIP')  NEW CATALOG SPACE(1,1) TRACKS RECFM(F,B) LRECL(80) BLKSIZE(3120) UNIT(SYSDA)
+ALLOC DA('IBMUSER.XMILIB.XMI1W') NEW CATALOG SPACE(1,1) TRACKS RECFM(F,B) LRECL(80) BLKSIZE(3120) UNIT(SYSDA)
 ```
 
 **Option B — JCL** (submit as a batch job):
@@ -53,6 +55,11 @@ ALLOC DA('IBMUSER.XMILIB.XMIP')  NEW CATALOG SPACE(1,1) TRACKS RECFM(F,B) LRECL(
 //            DCB=(RECFM=FB,LRECL=80,BLKSIZE=3120),
 //            UNIT=SYSDA
 //XMIP     DD DSN=IBMUSER.XMILIB.XMIP,
+//            DISP=(NEW,CATLG,DELETE),
+//            SPACE=(TRK,(1,1)),
+//            DCB=(RECFM=FB,LRECL=80,BLKSIZE=3120),
+//            UNIT=SYSDA
+//XMI1W    DD DSN=IBMUSER.XMILIB.XMI1W,
 //            DISP=(NEW,CATLG,DELETE),
 //            SPACE=(TRK,(1,1)),
 //            DCB=(RECFM=FB,LRECL=80,BLKSIZE=3120),
@@ -131,16 +138,18 @@ DA('IBMUSER.RECEIVED.TEST') UNIT(SYSDA) SPACE(1,1) TRACKS
 
 | Dataset | Expected behaviour |
 |---|---|
-| `XMI1M`  | Message text appears on terminal, then sequential dataset restores |
+| `XMI1M`  | Message text appears on terminal (80 cols), then sequential dataset restores |
 | `XMI1`   | No message — prompts immediately for restore parameters, dataset restores |
-| `XMIPM`  | Message text appears on terminal, then PDS restores with members MEMBER1, MEMBER2 |
+| `XMIPM`  | Message text appears on terminal (80 cols), then PDS restores with members MEMBER1, MEMBER2 |
 | `XMIP`   | No message — PDS restores with members MEMBER1, MEMBER2 |
+| `XMI1W`  | Wide message fills 132 columns on terminal, then sequential dataset restores |
 
 Verification checklist:
 - [ ] `XMI1M`  — message displays, sequential dataset restored successfully
 - [ ] `XMI1`   — no message, sequential dataset restored successfully
 - [ ] `XMIPM`  — message displays, PDS restored with 2 members (MEMBER1, MEMBER2)
 - [ ] `XMIP`   — no message, PDS restored with 2 members (MEMBER1, MEMBER2)
+- [ ] `XMI1W`  — wide message fills 132 columns (verify on Model 5 terminal), sequential dataset restored
 
 ---
 

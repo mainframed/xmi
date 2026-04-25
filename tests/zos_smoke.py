@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-XMI smoke test: build 4 XMI variants, verify with local parser, upload to z/OS.
+XMI smoke test: build XMI variants, verify with local parser, upload to z/OS.
 
 Usage:
     python tests/zos_smoke.py                    # build + parse only
@@ -19,11 +19,34 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from xmi import XMIT, create_xmi, resolve_message
+from xmi import XMIT, create_xmi
 
 DEFAULT_HOST = '192.168.1.141'
 DEFAULT_HLQ  = 'IBMUSER.XMILIB'
-MESSAGE_TEXT = 'XMI smoke test\\nCreated by Python xmi library\\nReply ALL'
+
+MESSAGE_80 = (
+    'XMI smoke test (80x32)\\n'
+    '========================================\\n'
+    'Created by Python xmi library\\n'
+    'Reply ALL'
+)
+
+MESSAGE_132 = (
+    'XMI smoke test - WIDE FORMAT (132x27)\\n'
+    + '=' * 132 + '\\n'
+    + 'Created by Python xmi library\\n'
+    + 'This message demonstrates the full 132-column width of a Model 5 / 3278 terminal.\\n'
+    + '=' * 132
+)
+
+# Each entry: (source_type, message, message_format, expect_msg)
+VARIANTS = {
+    'XMI1M': ('seq', MESSAGE_80,  '80x32',  True),
+    'XMI1':  ('seq', None,        None,     False),
+    'XMIPM': ('pds', MESSAGE_80,  '80x32',  True),
+    'XMIP':  ('pds', None,        None,     False),
+    'XMI1W': ('seq', MESSAGE_132, '132x27', True),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -31,7 +54,7 @@ MESSAGE_TEXT = 'XMI smoke test\\nCreated by Python xmi library\\nReply ALL'
 # ---------------------------------------------------------------------------
 
 def build_xmis(work_dir: Path) -> dict[str, bytes]:
-    """Return {name: bytes} for the 4 XMI variants."""
+    """Return {name: bytes} for all XMI variants."""
 
     seq_src = work_dir / 'SEQFILE.txt'
     seq_src.write_text('Sequential dataset content\nLine 2\nLine 3\n')
@@ -41,12 +64,16 @@ def build_xmis(work_dir: Path) -> dict[str, bytes]:
     (pds_dir / 'MEMBER1').write_text('First PDS member\nLine 2\n')
     (pds_dir / 'MEMBER2').write_text('Second PDS member\nMore data\n')
 
-    return {
-        'XMI1M': create_xmi(str(seq_src), message=MESSAGE_TEXT),
-        'XMI1':  create_xmi(str(seq_src)),
-        'XMIPM': create_xmi(str(pds_dir), message=MESSAGE_TEXT),
-        'XMIP':  create_xmi(str(pds_dir)),
-    }
+    result = {}
+    for name, (src_type, msg, fmt, _) in VARIANTS.items():
+        src = str(seq_src) if src_type == 'seq' else str(pds_dir)
+        kwargs = {}
+        if msg:
+            kwargs['message'] = msg
+        if fmt:
+            kwargs['message_format'] = fmt
+        result[name] = create_xmi(src, **kwargs)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +85,7 @@ def verify_xmis(xmis: dict[str, bytes], work_dir: Path) -> list[str]:
     failures = []
     print('\nLocal parser verification:')
     for name, data in xmis.items():
-        expect_msg = name.endswith('M')
+        _, _, _, expect_msg = VARIANTS[name]
         xmi_path = work_dir / f'{name}.xmi'
         xmi_path.write_bytes(data)
 
@@ -101,7 +128,6 @@ def upload_to_zos(xmis: dict[str, bytes], host: str, hlq: str) -> None:
 
     for name, data in xmis.items():
         dsn = f'{hlq}.{name}'
-        # Allocate as RECFM=FB LRECL=80 — standard format for XMI distribution
         ftp.sendcmd('SITE RECFM=FB LRECL=80 BLKSIZE=3120')
         ftp.storbinary(f"STOR '{dsn}'", io.BytesIO(data))
         print(f'  Uploaded {dsn}  ({len(data):,} bytes)')
@@ -116,7 +142,7 @@ def upload_to_zos(xmis: dict[str, bytes], host: str, hlq: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description='Build 4 XMI variants, verify with local parser, '
+        description='Build XMI variants, verify with local parser, '
                     'optionally upload to z/OS.')
     parser.add_argument('--upload', action='store_true',
                         help='Upload to z/OS after local verification')
@@ -132,7 +158,9 @@ def main() -> int:
         print('Building XMI files...')
         xmis = build_xmis(work)
         for name, data in xmis.items():
-            print(f'  {name:6s}  {len(data):,} bytes')
+            _, _, fmt, has_msg = VARIANTS[name]
+            tag = f'msg:{fmt}' if has_msg else 'no msg'
+            print(f'  {name:6s}  {len(data):>6,} bytes  ({tag})')
 
         failures = verify_xmis(xmis, work)
 
@@ -150,7 +178,6 @@ def main() -> int:
             if failures:
                 print('\nWarning: local checks failed — uploading anyway.')
             upload_to_zos(xmis, args.host, args.hlq)
-
         else:
             print(f'\nRun with --upload to send to z/OS ({args.host})')
             print(f'  python tests/zos_smoke.py --upload')
