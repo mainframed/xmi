@@ -138,7 +138,9 @@ def create_main():
   %(prog)s myfolder/ -o MY.XMI
   %(prog)s myfolder/ -o MY.XMI --dsn MY.PDS --from-user IBMUSER
   %(prog)s myfile.jcl -o SEQ.XMI --dsn MY.SEQ --recfm FB --lrecl 80
-  %(prog)s xmi_folder/ -o MULTI.XMI --dsn MULTI.PDS'''
+  %(prog)s myfile.jcl -o SEQ.XMI --message "Hello from Python!"
+  %(prog)s myfile.jcl -o SEQ.XMI --message-file banner-80x32.txt
+  %(prog)s myfile.jcl -o SEQ.XMI --message-file banner.txt --message-format 132x27'''
 
     from pathlib import Path
 
@@ -177,6 +179,15 @@ def create_main():
     ap.add_argument('--to-node',
         default='LOCAL', metavar='NODE',
         help='Destination node name (default: LOCAL)')
+    ap.add_argument('--message',
+        default=None, metavar='TEXT',
+        help='Message displayed on z/OS RECEIVE (use \\n for line breaks)')
+    ap.add_argument('--message-file',
+        dest='message_file', default=None, metavar='PATH',
+        help='Read message from a UTF-8 text file (takes precedence over --message)')
+    ap.add_argument('--message-format',
+        dest='message_format', default='80x32', metavar='FORMAT',
+        help='Terminal format: 80x32 (default, LRECL 80, 32 lines) or 132x27 (LRECL 132, 27 lines)')
     ap.add_argument('-d', '--debug',
         help='Print debugging statements',
         action='store_const', dest='loglevel',
@@ -199,6 +210,9 @@ def create_main():
         from_node=args.from_node,
         to_user=args.to_user,
         to_node=args.to_node,
+        message=args.message,
+        message_file=args.message_file,
+        message_format=args.message_format,
         loglevel=args.loglevel,
     )
     print('Created: {}'.format(output))
