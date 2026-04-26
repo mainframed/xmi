@@ -3289,6 +3289,14 @@ class XMIT:
             is_text = False
 
         if not is_text:
+            # FB context: pad to LRECL multiple so IEBCOPY sub-block data_len
+            # is LRECL-aligned.  z/OS IEBCOPY can't reconstruct fixed-length
+            # records from a chunk whose size isn't a multiple of LRECL.
+            # Trailing nulls are harmless — NETDATA parsers stop at INMR06.
+            if recfm.startswith('F') and lrecl > 0:
+                remainder = len(file_bytes) % lrecl
+                if remainder:
+                    file_bytes = file_bytes + b'\x00' * (lrecl - remainder)
             return file_bytes
 
         if recfm.startswith('F'):

@@ -262,6 +262,45 @@ class TestRoundTrip(unittest.TestCase):
         self.assertIn('Wide message', x.get_message())
         Path(fname).unlink()
 
+    def test_binary_member_padded_to_lrecl_boundary(self):
+        # A binary file (e.g. an inner XMI) stored in an FB PDS must be padded
+        # to a multiple of LRECL so the IEBCOPY sub-block data_len is aligned.
+        # Unpadded binary caused z/OS IEBCOPY restore to fail (RECFM=FB records
+        # with a non-LRECL-multiple chunk length).
+        builder = XMIT(encoding='cp500')
+        # Manufacture bytes that aren't UTF-8 and aren't LRECL-aligned
+        fake_xmi = b'\xff\x80\xfe\x81' * 100 + b'\xdd\xee\xff'  # 403 bytes, non-UTF-8
+        assert len(fake_xmi) % 80 != 0, 'test pre-condition'
+        result = builder._xmi_encode_input(fake_xmi, 80, 'FB')
+        self.assertEqual(len(result) % 80, 0, 'binary member must be padded to LRECL multiple')
+        self.assertTrue(result.startswith(fake_xmi), 'original bytes must be preserved')
+
+    def test_nested_xmi_roundtrip(self):
+        # Create an inner XMI (PDS), then package it with a text file into an
+        # outer PDS XMI, parse the outer back and confirm both members exist.
+        with tempfile.TemporaryDirectory() as d:
+            inner_dir = Path(d) / 'INNER'
+            inner_dir.mkdir()
+            (inner_dir / 'MEMBER1').write_text('inner content\n')
+            inner_xmi_bytes = create_xmi(str(inner_dir))
+
+        with tempfile.TemporaryDirectory() as d:
+            outer_dir = Path(d) / 'OUTER'
+            outer_dir.mkdir()
+            (outer_dir / 'INNERXMI').write_bytes(inner_xmi_bytes)
+            (outer_dir / 'README').write_text('text member\n')
+            outer_xmi_bytes = create_xmi(str(outer_dir))
+
+        with tempfile.NamedTemporaryFile(suffix='.xmi', delete=False) as f:
+            f.write(outer_xmi_bytes)
+            fname = f.name
+        x = XMIT(filename=fname, quiet=True)
+        x.open()
+        members = x.get_members(x.get_files()[0])
+        self.assertIn('INNERXMI', members)
+        self.assertIn('README', members)
+        Path(fname).unlink()
+
 
 class TestPublicAPI(unittest.TestCase):
 
