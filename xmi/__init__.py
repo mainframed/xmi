@@ -267,6 +267,49 @@ def create_xmi(
     deep) produces a partitioned dataset (PDS) XMI whose members are the
     files found in the folder.
 
+    **PDS member naming and encoding (folder input):**
+
+    The file extension is always dropped; the stem is uppercased and
+    truncated to 8 characters (``photo.jpg`` → ``PHOTO``,
+    ``my-source.asm`` → ``MY-SOUR``).
+
+    Each file is classified as *text* (valid UTF-8) or *binary* (not),
+    which drives encoding — the extension itself is not consulted:
+
+    - ``.txt``, ``.jcl``, ``.rexx``, ``.asm``, ``.py``, ``.sh``,
+      ``.xml``, ``.json`` and similar — **text**: converted UTF-8 →
+      EBCDIC and padded to *lrecl*; lines longer than *lrecl* are
+      silently truncated.
+    - ``.xmi``, ``.xmit`` — **binary**: nested XMI files that z/OS can
+      ``RECEIVE`` again after the outer PDS is restored.
+    - ``.jpg``, ``.jpeg``, ``.png``, ``.gif``, ``.zip``, ``.bin`` and
+      any other non-UTF-8 content — **binary**: portable only in an
+      all-binary folder (see below).
+
+    **All-binary folder** (every file fails UTF-8 decode): *recfm* is
+    automatically switched to ``'U'`` and *lrecl* to ``0``.  All
+    members are stored as raw bytes with no padding or conversion —
+    roundtrip is lossless for every binary type including ``.xmi``.
+
+    **Mixed folder** (text and binary files together): *recfm* stays
+    ``'FB'``.  Text members are EBCDIC-converted and padded to *lrecl*
+    as normal.  Binary members are stored as raw bytes null-padded to
+    the next *lrecl* boundary so that IEBCOPY's fixed-length record
+    structure is preserved.  After this padding:
+
+    - ``.xmi`` / ``.xmit`` — **safe**: NETDATA parsing stops at
+      ``INMR06``, so trailing nulls beyond the end record are ignored
+      by z/OS ``RECEIVE``.
+    - ``.jpg`` / ``.jpeg`` — **safe**: JPEG decoders ignore trailing
+      data after the ``FFD9`` end-of-image marker.
+    - ``.zip`` — **safe**: ZIP readers scan *backward* from EOF for the
+      End of Central Directory signature; trailing nulls don't contain
+      that signature, so every mainstream tool finds the real EOCD and
+      opens the archive normally.
+    - ``.png``, ``.bin`` and most other length-delimited formats —
+      **not safe**: their parsers derive the file length from the
+      container; the extra null bytes cause a format error.
+
     Args:
         input_path (str): Path to a file or directory to package as XMI.
         output_file (str): Path where the XMI file will be written.  If
