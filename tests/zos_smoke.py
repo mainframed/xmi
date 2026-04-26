@@ -41,11 +41,13 @@ MESSAGE_132 = (
 
 # Each entry: (source_type, message, message_format, expect_msg)
 VARIANTS = {
-    'XMI1M': ('seq', MESSAGE_80,  '80x32',  True),
-    'XMI1':  ('seq', None,        None,     False),
-    'XMIPM': ('pds', MESSAGE_80,  '80x32',  True),
-    'XMIP':  ('pds', None,        None,     False),
-    'XMI1W': ('seq', MESSAGE_132, '132x27', True),
+    'XMI1M':  ('seq',    MESSAGE_80,  '80x32',  True),
+    'XMI1':   ('seq',    None,        None,     False),
+    'XMIPM':  ('pds',    MESSAGE_80,  '80x32',  True),
+    'XMIP':   ('pds',    None,        None,     False),
+    'XMI1W':  ('seq',    MESSAGE_132, '132x27', True),
+    'XMIPNM': ('nested', MESSAGE_80,  '80x32',  True),
+    'XMIPN':  ('nested', None,        None,     False),
 }
 
 
@@ -64,9 +66,27 @@ def build_xmis(work_dir: Path) -> dict[str, bytes]:
     (pds_dir / 'MEMBER1').write_text('First PDS member\nLine 2\n')
     (pds_dir / 'MEMBER2').write_text('Second PDS member\nMore data\n')
 
+    # Inner XMI used by the nested variants — a PDS with two text members
+    inner_pds = work_dir / 'INNERPDS'
+    inner_pds.mkdir()
+    (inner_pds / 'INNER1').write_text('Inner member 1\n')
+    (inner_pds / 'INNER2').write_text('Inner member 2\n')
+    inner_xmi = create_xmi(str(inner_pds))
+
+    # Outer folder: the inner XMI as a binary member + one text member
+    nested_dir = work_dir / 'NESTED'
+    nested_dir.mkdir()
+    (nested_dir / 'INNERXMI').write_bytes(inner_xmi)
+    (nested_dir / 'README').write_text('Outer text member\n')
+
     result = {}
     for name, (src_type, msg, fmt, _) in VARIANTS.items():
-        src = str(seq_src) if src_type == 'seq' else str(pds_dir)
+        if src_type == 'seq':
+            src = str(seq_src)
+        elif src_type == 'pds':
+            src = str(pds_dir)
+        else:  # nested
+            src = str(nested_dir)
         kwargs = {}
         if msg:
             kwargs['message'] = msg
@@ -102,6 +122,17 @@ def verify_xmis(xmis: dict[str, bytes], work_dir: Path) -> list[str]:
                 if 'smoke test' not in text:
                     failures.append(f'{name}: message parsed but text not found')
 
+            # Nested variants: verify the inner XMI member exists in the PDS
+            if VARIANTS[name][0] == 'nested':
+                try:
+                    members = x.get_members(x.get_files()[0])
+                    if 'INNERXMI' not in members:
+                        failures.append(f'{name}: INNERXMI member not found in PDS')
+                    if 'README' not in members:
+                        failures.append(f'{name}: README member not found in PDS')
+                except Exception as exc:
+                    failures.append(f'{name}: could not list members: {exc}')
+
             status = 'PASS' if not any(f.startswith(name) for f in failures) else 'FAIL'
             msg_info = f'  message: {x.get_message()!r:.60}' if has_msg else ''
             print(f'  [{status}] {name:6s}  has_message={has_msg}{msg_info}')
@@ -135,7 +166,10 @@ def upload_to_zos(xmis: dict[str, bytes], host: str, hlq: str) -> None:
         print(f'  Uploaded {dsn}  ({len(data):,} bytes)')
 
     ftp.quit()
-    print(f'\nDone. On z/OS, RECEIVE INDSN(\'{hlq}.XMI1M\') etc.')
+    print(f'\nDone. On z/OS:')
+    print(f'  RECEIVE INDSN(\'{hlq}.XMI1M\')   <- seq + message')
+    print(f'  RECEIVE INDSN(\'{hlq}.XMIPNM\')  <- nested PDS + message')
+    print(f'  Then from the received PDS: RECEIVE INDSN(\'PDS(INNERXMI)\')')
 
 
 # ---------------------------------------------------------------------------
@@ -144,8 +178,8 @@ def upload_to_zos(xmis: dict[str, bytes], host: str, hlq: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description='Build XMI variants, verify with local parser, '
-                    'optionally upload to z/OS.')
+        description='Build XMI variants (seq, PDS, nested), verify with '
+                    'local parser, optionally upload to z/OS.')
     parser.add_argument('--upload', action='store_true',
                         help='Upload to z/OS after local verification')
     parser.add_argument('--host', default=DEFAULT_HOST,
