@@ -3557,20 +3557,24 @@ class XMIT:
         rec[0] = 0x01
         return bytes(rec)
 
-    def _xmi_directory_block(self, members):
+    def _xmi_directory_block(self, members, is_last=True):
         '''Build one 276-byte PDS directory block for *members*.
 
         *members* is a list of (name_str, ttr_int, ispf_bytes_or_None) triples,
         at most 5 per block when ISPF stats are included (42 bytes/entry) or
         8 per block without stats (12 bytes/entry).
 
+        *is_last*: True for the final (or only) directory block — appends the
+        end-of-directory sentinel (0xFF*8).  Intermediate blocks must pass
+        False so the reader does not stop scanning too early.
+
         Layout (276 bytes total):
           bytes  0- 7: key area (zeroes)
           bytes  8- 9: key_len = 8
           bytes 10-11: data_len = 256 (0x0100)
           bytes 12-19: last-referenced-member (zeroes)
-          bytes 20-21: used_length = entries + sentinel + 2 (the +2 includes itself)
-          bytes 22+  : directory entries then end-of-directory sentinel
+          bytes 20-21: used_length = entries [+ sentinel] + 2
+          bytes 22+  : directory entries [+ end-of-directory sentinel if last]
           remainder  : zero-padded to 276 bytes
 
         Each entry: 8-byte EBCDIC name + 3-byte TTR + 1-byte C-byte
@@ -3589,8 +3593,8 @@ class XMIT:
                 c_byte = b'\x00'
                 entries += ebcdic_name + ttr_bytes + c_byte
 
-        # End-of-directory sentinel: 0xFF * 8 + 3-byte TTR(0) + C-byte(0)
-        sentinel = b'\xff' * 8 + b'\x00\x00\x00\x00'
+        # End-of-directory sentinel: only in the last directory block
+        sentinel = b'\xff' * 8 + b'\x00\x00\x00\x00' if is_last else b''
 
         # used_length includes itself (the +2)
         used_length = len(entries) + len(sentinel) + 2
@@ -3605,19 +3609,14 @@ class XMIT:
             b'\x01\x00'         # data_len = 256
         )
 
-        # 8-byte PDS key: 0xFF*8 marks last/only directory block
+        # 8-byte PDS key
         pds_key = b'\xff' * 8
 
-        # 256-byte PDS data: used_length + entries + sentinel + zero-padding
+        # 256-byte PDS data: used_length + entries [+ sentinel] + zero-padding
         pds_data = struct.pack('>H', used_length) + bytes(entries) + bytes(sentinel)
         pds_data = pds_data.ljust(256, b'\x00')[:256]
 
-        dir_block = iebcopy_hdr + pds_key + pds_data  # 12 + 8 + 256 = 276 bytes
-
-        # Separate 12-byte directory EOM record (flag=0x88)
-        dir_eom = b'\x88' + b'\x00' * 11
-
-        return dir_block, dir_eom
+        return iebcopy_hdr + pds_key + pds_data  # 276 bytes
 
     def _xmi_member_block(self, name, data_bytes, ttr, blksize=3200, recfm='FB'):
         '''Build a list of IEBCOPY member data sub-block records.
@@ -3718,12 +3717,15 @@ class XMIT:
             ttr_map.append((name, i + 1, ebcdic_data, ispf))
 
         # Directory block(s): 5 entries/block max with ISPF stats (42 bytes each).
+        # Only the last block carries the end-of-directory sentinel (0xFF*8);
+        # intermediate blocks must not, or the reader stops scanning too early.
         chunk_size = 5
         dir_entries = [(name, ttr, ispf) for name, ttr, _, ispf in ttr_map]
-        for i in range(0, len(dir_entries), chunk_size):
-            dir_block, dir_eom = self._xmi_directory_block(dir_entries[i:i + chunk_size])
-            blocks.append(dir_block)
-            blocks.append(dir_eom)
+        chunks = [dir_entries[i:i + chunk_size]
+                  for i in range(0, len(dir_entries), chunk_size)]
+        for idx, chunk in enumerate(chunks):
+            blocks.append(self._xmi_directory_block(chunk, is_last=(idx == len(chunks) - 1)))
+        blocks.append(b'\x88' + b'\x00' * 11)  # single IEBCOPY directory EOM
 
         # Member blocks - each sub-block is a separate XMI data record
         for name, ttr, ebcdic_data, _ in ttr_map:

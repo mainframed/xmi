@@ -301,6 +301,28 @@ class TestRoundTrip(unittest.TestCase):
         self.assertIn('README', members)
         Path(fname).unlink()
 
+    def test_pds_more_than_five_members(self):
+        # Regression: >5 members spanned two directory blocks; the reader
+        # stopped at the first block's end-of-directory sentinel and dropped
+        # the 6th+ members.
+        with tempfile.TemporaryDirectory() as d:
+            folder = Path(d) / 'BIGPDS'
+            folder.mkdir()
+            names = ['MEM{}'.format(i) for i in range(7)]
+            for name in names:
+                (folder / name).write_text('content of {}\n'.format(name))
+            xmi_bytes = create_xmi(str(folder))
+
+        with tempfile.NamedTemporaryFile(suffix='.xmi', delete=False) as f:
+            f.write(xmi_bytes)
+            fname = f.name
+        x = XMIT(filename=fname, quiet=True)
+        x.open()
+        members = x.get_members(x.get_files()[0])
+        for name in names:
+            self.assertIn(name, members, 'member {} missing from parsed PDS'.format(name))
+        Path(fname).unlink()
+
 
 class TestPublicAPI(unittest.TestCase):
 
