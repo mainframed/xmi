@@ -46,7 +46,7 @@ xmi Python Library
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-__version__ = '1.0.1'
+__version__ = '1.0.2'
 __author__ = 'Philip Young, Henri Kuiper'
 __license__ = "GPL"
 
@@ -102,6 +102,11 @@ IBM_text_units[0x102A] = { 'name' : "INMRECCT", 'type' : "character", 'desc' : '
 IBM_text_units[0x102C] = { 'name' : "INMSIZE" , 'type' : "decimal",   'desc' : 'File size in bytes'}
 IBM_text_units[0x102F] = { 'name' : "INMNUMF" , 'type' : "decimal",   'desc' : 'Number of files transmitted'}
 IBM_text_units[0x8012] = { 'name' : "INMTYPE" , 'type' : "hex",       'desc' : 'Data set type'}
+
+MESSAGE_FORMATS = {
+    '80x32':  (80, 32),
+    '132x27': (132, 27),
+}
 
 def convert_ebcdic(ebcdic_file, lrecl=80):
     '''Converts an ebcdic mainframe file to text. Returns string.
@@ -197,6 +202,48 @@ def open_file(
     return mfile
 
 
+def resolve_message(message=None, message_file=None, message_format='80x32'):
+    '''Resolve and validate message source; return (text, lrecl, max_lines).
+
+    text is None when no message is provided or the content is whitespace-only.
+    File path is consumed here and never passed downstream.
+    '''
+    if message_format not in MESSAGE_FORMATS:
+        raise ValueError(
+            "Unknown message_format {!r}. Choose from: {}".format(
+                message_format, ', '.join(sorted(MESSAGE_FORMATS))))
+
+    lrecl, max_lines = MESSAGE_FORMATS[message_format]
+
+    if message_file is not None:
+        text = Path(message_file).read_text(encoding='utf-8')
+    elif message is not None:
+        text = message.replace('\\n', '\n')
+    else:
+        return (None, lrecl, max_lines)
+
+    if not text.strip():
+        return (None, lrecl, max_lines)
+
+    lines = text.splitlines()
+
+    clipped = []
+    for i, line in enumerate(lines):
+        if len(line) > lrecl:
+            print(
+                "Warning: message line {} truncated to {} characters".format(i + 1, lrecl),
+                file=sys.stderr)
+            line = line[:lrecl]
+        clipped.append(line)
+
+    if len(clipped) > max_lines:
+        print(
+            "Warning: message truncated to {} lines".format(max_lines),
+            file=sys.stderr)
+        clipped = clipped[:max_lines]
+
+    return ('\n'.join(clipped), lrecl, max_lines)
+
 
 def create_xmi(
         input_path,
@@ -209,6 +256,9 @@ def create_xmi(
         from_node='LOCAL',
         to_user='PYTHON',
         to_node='LOCAL',
+        message=None,
+        message_file=None,
+        message_format='80x32',
         loglevel=logging.WARNING
     ):
     '''Creates an XMI (NETDATA) file from a local file or folder.
@@ -216,6 +266,49 @@ def create_xmi(
     A single file produces a sequential dataset XMI.  A folder (one level
     deep) produces a partitioned dataset (PDS) XMI whose members are the
     files found in the folder.
+
+    **PDS member naming and encoding (folder input):**
+
+    The file extension is always dropped; the stem is uppercased and
+    truncated to 8 characters (``photo.jpg`` → ``PHOTO``,
+    ``my-source.asm`` → ``MY-SOUR``).
+
+    Each file is classified as *text* (valid UTF-8) or *binary* (not),
+    which drives encoding — the extension itself is not consulted:
+
+    - ``.txt``, ``.jcl``, ``.rexx``, ``.asm``, ``.py``, ``.sh``,
+      ``.xml``, ``.json`` and similar — **text**: converted UTF-8 →
+      EBCDIC and padded to *lrecl*; lines longer than *lrecl* are
+      silently truncated.
+    - ``.xmi``, ``.xmit`` — **binary**: nested XMI files that z/OS can
+      ``RECEIVE`` again after the outer PDS is restored.
+    - ``.jpg``, ``.jpeg``, ``.png``, ``.gif``, ``.zip``, ``.bin`` and
+      any other non-UTF-8 content — **binary**: portable only in an
+      all-binary folder (see below).
+
+    **All-binary folder** (every file fails UTF-8 decode): *recfm* is
+    automatically switched to ``'U'`` and *lrecl* to ``0``.  All
+    members are stored as raw bytes with no padding or conversion —
+    roundtrip is lossless for every binary type including ``.xmi``.
+
+    **Mixed folder** (text and binary files together): *recfm* stays
+    ``'FB'``.  Text members are EBCDIC-converted and padded to *lrecl*
+    as normal.  Binary members are stored as raw bytes null-padded to
+    the next *lrecl* boundary so that IEBCOPY's fixed-length record
+    structure is preserved.  After this padding:
+
+    - ``.xmi`` / ``.xmit`` — **safe**: NETDATA parsing stops at
+      ``INMR06``, so trailing nulls beyond the end record are ignored
+      by z/OS ``RECEIVE``.
+    - ``.jpg`` / ``.jpeg`` — **safe**: JPEG decoders ignore trailing
+      data after the ``FFD9`` end-of-image marker.
+    - ``.zip`` — **safe**: ZIP readers scan *backward* from EOF for the
+      End of Central Directory signature; trailing nulls don't contain
+      that signature, so every mainstream tool finds the real EOCD and
+      opens the archive normally.
+    - ``.png``, ``.bin`` and most other length-delimited formats —
+      **not safe**: their parsers derive the file length from the
+      container; the extra null bytes cause a format error.
 
     Args:
         input_path (str): Path to a file or directory to package as XMI.
@@ -228,17 +321,24 @@ def create_xmi(
         recfm (str): Record format string (``'FB'``, ``'F'``, ``'VB'``,
             ``'V'``, ``'U'``).  Default ``'FB'``.
         encoding (str): EBCDIC codepage for text encoding.  Default
-            ``'cp1140'``.
+            ``'cp500'``.
         from_user (str): Originating user ID (max 8 chars).  Also used as
             the userid recorded in PDS member ISPF statistics.
         from_node (str): Originating node name (max 8 chars).
         to_user (str): Destination user ID (max 8 chars).
         to_node (str): Destination node name (max 8 chars).
+        message (str): Inline message string displayed on z/OS RECEIVE.
+            Use ``\\n`` for line breaks.  Ignored if *message_file* is given.
+        message_file (str): Path to a UTF-8 text file whose content is used
+            as the message.  Takes precedence over *message*.
+        message_format (str): Terminal format preset — ``'80x32'`` (default,
+            LRECL 80, 32 lines) or ``'132x27'`` (LRECL 132, 27 lines).
         loglevel: Python logging level.  Default ``logging.WARNING``.
 
     Returns:
-        bytes: Raw XMI file content.
+        bytes: Raw XMI file content (only when *output_file* is ``None``).
     '''
+    resolved_msg = resolve_message(message, message_file, message_format)
     builder = XMIT(encoding=encoding, loglevel=loglevel)
     xmi_bytes = builder.build_xmi(
         input_path,
@@ -249,6 +349,7 @@ def create_xmi(
         from_node=from_node,
         to_user=to_user,
         to_node=to_node,
+        resolved_msg=resolved_msg,
     )
     if output_file:
         Path(output_file).write_bytes(xmi_bytes)
@@ -2992,15 +3093,37 @@ class XMIT:
             from_node='LOCAL',
             to_user='PYTHON',
             to_node='LOCAL',
+            message=None,
+            message_file=None,
+            message_format='80x32',
+            resolved_msg=None,
     ):
         '''Build and return raw XMI (NETDATA) bytes from *input_path*.
 
         If *input_path* is a file  → sequential dataset XMI.
         If *input_path* is a folder → PDS XMI whose members are the files.
 
-        ISPF statistics are always written into PDS directory entries using
-        *from_user* as the userid, the current date/time, and the line count.
+        Args:
+            input_path (str): File or directory to package.
+            dsn (str): Dataset name in XMI metadata (default: uppercased stem).
+            lrecl (int): Logical record length (default: 80).
+            recfm (str): Record format — ``'FB'``, ``'F'``, ``'VB'``, ``'V'``, ``'U'``.
+            from_user (str): Originating user ID (max 8 chars).
+            from_node (str): Originating node name (max 8 chars).
+            to_user (str): Destination user ID (max 8 chars).
+            to_node (str): Destination node name (max 8 chars).
+            message (str): Inline message; ``\\n`` for line breaks.
+            message_file (str): Path to UTF-8 message file (takes precedence).
+            message_format (str): ``'80x32'`` (default) or ``'132x27'``.
+            resolved_msg: Pre-resolved ``(text, lrecl, max_lines)`` tuple;
+                pass from ``create_xmi`` to avoid double resolution.
+
+        Returns:
+            bytes: Raw XMI file bytes.
         '''
+        if resolved_msg is None:
+            resolved_msg = resolve_message(message, message_file, message_format)
+
         p = Path(input_path)
         if not p.exists():
             raise FileNotFoundError("Input path not found: {}".format(input_path))
@@ -3008,11 +3131,13 @@ class XMIT:
         if p.is_dir():
             return self._build_pds_xmi(p, dsn=dsn, lrecl=lrecl, recfm=recfm,
                                        from_user=from_user, from_node=from_node,
-                                       to_user=to_user, to_node=to_node)
+                                       to_user=to_user, to_node=to_node,
+                                       resolved_msg=resolved_msg)
         else:
             return self._build_seq_xmi(p, dsn=dsn, lrecl=lrecl, recfm=recfm,
                                        from_user=from_user, from_node=from_node,
-                                       to_user=to_user, to_node=to_node)
+                                       to_user=to_user, to_node=to_node,
+                                       resolved_msg=resolved_msg)
 
     # -- Low-level segment / text-unit builders ------------------------- #
 
@@ -3207,6 +3332,14 @@ class XMIT:
             is_text = False
 
         if not is_text:
+            # FB context: pad to LRECL multiple so IEBCOPY sub-block data_len
+            # is LRECL-aligned.  z/OS IEBCOPY can't reconstruct fixed-length
+            # records from a chunk whose size isn't a multiple of LRECL.
+            # Trailing nulls are harmless — NETDATA parsers stop at INMR06.
+            if recfm.startswith('F') and lrecl > 0:
+                remainder = len(file_bytes) % lrecl
+                if remainder:
+                    file_bytes = file_bytes + b'\x00' * (lrecl - remainder)
             return file_bytes
 
         if recfm.startswith('F'):
@@ -3231,7 +3364,7 @@ class XMIT:
 
     # -- Control record builders ---------------------------------------- #
 
-    def _xmi_inmr01(self, from_user, from_node, to_user, to_node):
+    def _xmi_inmr01(self, from_user, from_node, to_user, to_node, has_message=False):
         '''Build INMR01 control record bytes.'''
         import datetime
         now = datetime.datetime.utcnow()
@@ -3240,6 +3373,7 @@ class XMIT:
         def _enc(s, maxlen):
             return s.upper()[:maxlen].encode(self.ebcdic)
 
+        numf = 2 if has_message else 1  # message stream counts as an additional file
         tu = (
             self._xmi_tu(0x0042, b'\x50') +              # INMLRECL (required constant in INMR01)
             self._xmi_tu(0x1011, _enc(from_node, 8)) +  # INMFNODE
@@ -3247,12 +3381,17 @@ class XMIT:
             self._xmi_tu(0x1001, _enc(to_node, 8)) +    # INMTNODE
             self._xmi_tu(0x1002, _enc(to_user, 8)) +    # INMTUID
             self._xmi_tu(0x1024, timestamp) +            # INMFTIME
-            self._xmi_tu(0x102F, struct.pack('>B', 1))  # INMNUMF = 1
+            self._xmi_tu(0x102F, struct.pack('>B', numf))  # INMNUMF
         )
         return self._xmi_ctrl_seg('INMR01', tu)
 
-    def _xmi_inmr02_seq(self, dsn, lrecl, recfm, data_len):
-        '''Build INMR02 for a sequential dataset (utility=INMCOPY).'''
+    def _xmi_inmr02_seq(self, dsn, lrecl, recfm, data_len, file_number=1):
+        '''Build INMR02 for a sequential dataset (utility=INMCOPY).
+
+        *file_number* is the NETDATA file ordinal (1-based).  Pass 2 when a
+        message stream occupies file 1 so z/OS RECEIVE can match this INMR02
+        to the correct INMR03/data pair.
+        '''
         blksize = self._xmi_blksize(lrecl, recfm)
         recfm_bytes = self._xmi_recfm_byte(recfm)
         dsorg = b'\x40\x00'  # PS
@@ -3266,14 +3405,15 @@ class XMIT:
             self._xmi_tu(0x0049, recfm_bytes) +                         # INMRECFM
             self._xmi_dsn_tu(dsn)                                       # INMDSNAM
         )
-        return self._xmi_ctrl_seg('INMR02', tu, numfiles=1)
+        return self._xmi_ctrl_seg('INMR02', tu, numfiles=file_number)
 
-    def _xmi_inmr02_pds(self, dsn, lrecl, recfm, num_members, inmsize=0):
+    def _xmi_inmr02_pds(self, dsn, lrecl, recfm, num_members, inmsize=0, file_number=1):
         '''Build the two INMR02 records needed for a PDS XMI.
 
         First:  IEBCOPY record (describes the PDS structure).
         Second: INMCOPY record (transport layer).
         *inmsize*: total byte count of the IEBCOPY data stream.
+        *file_number*: NETDATA file ordinal; pass 2 when a message occupies file 1.
         '''
         blksize = self._xmi_blksize(lrecl, recfm)
         recfm_bytes = self._xmi_recfm_byte(recfm)
@@ -3305,24 +3445,85 @@ class XMIT:
             self._xmi_tu(0x0030, struct.pack('>I', 3220)) +            # INMBLKSZ (transport)
             self._xmi_tu(0x0049, b'\x48\x02')                          # INMRECFM (VS)
         )
-        return (self._xmi_ctrl_seg('INMR02', tu1, numfiles=1) +
-                self._xmi_ctrl_seg('INMR02', tu2, numfiles=1))
+        return (self._xmi_ctrl_seg('INMR02', tu1, numfiles=file_number) +
+                self._xmi_ctrl_seg('INMR02', tu2, numfiles=file_number))
 
-    def _xmi_inmr03(self, lrecl, inmsize=0):
-        '''Build INMR03 control record.'''
+    def _xmi_inmr03(self, lrecl, inmsize=0, recfm_bytes=b'\x00\x01'):
+        '''Build INMR03 control record.
+
+        recfm_bytes defaults to b'\x00\x01' for message streams (the value
+        z/OS TRANSMIT uses).  Pass self._xmi_recfm_byte(recfm) for dataset
+        streams so z/OS sees the correct RECFM on RECEIVE.
+        '''
         dsorg = b'\x40\x00'  # PS
 
         tu = (
             self._xmi_tu(0x102C, struct.pack('>I', inmsize)) +    # INMSIZE
             self._xmi_tu(0x003C, dsorg) +                         # INMDSORG
             self._xmi_tu(0x0042, struct.pack('>H', lrecl)) +      # INMLRECL (2 bytes)
-            self._xmi_tu(0x0049, b'\x00\x01')                     # INMRECFM
+            self._xmi_tu(0x0049, recfm_bytes)                     # INMRECFM
         )
         return self._xmi_ctrl_seg('INMR03', tu)
 
     def _xmi_inmr06(self):
         '''Build INMR06 (end-of-transmission) control record.'''
         return self._xmi_ctrl_seg('INMR06', b'')
+
+    def _xmi_message_inmr02(self, text, lrecl):
+        '''Build only the INMR02 control record for the embedded message.
+
+        INMTERM (key=0x0028, count=0) marks this as a message stream.
+        No INMDSNAM — its absence is how the parser identifies message INMR02s.
+
+        INMLRECL is set to 251 — the z/OS TRANSMIT transport value for terminal
+        messages, independent of the actual text LRECL (which lives in INMR03).
+        '''
+        ebcdic_data = self._xmi_text_to_ebcdic(text.encode('utf-8'), lrecl)
+        data_len = len(ebcdic_data)
+        dsorg = b'\x40\x00'  # PS
+
+        tu = (
+            self._xmi_tu(0x1028, 'INMCOPY'.encode(self.ebcdic)) +   # INMUTILN
+            struct.pack('>HH', 0x0028, 0) +                          # INMTERM flag (count=0)
+            self._xmi_tu(0x102C, struct.pack('>I', data_len)) +      # INMSIZE
+            self._xmi_tu(0x003C, dsorg) +                            # INMDSORG
+            self._xmi_tu(0x0042, struct.pack('>I', 251)) +           # INMLRECL=251 (terminal transport value)
+            self._xmi_tu(0x0049, self._xmi_recfm_byte('FB'))         # INMRECFM
+        )
+        return self._xmi_ctrl_seg('INMR02', tu, numfiles=1)
+
+    def _xmi_message_data(self, text, lrecl):
+        '''Build INMR03 + DATA segments for the embedded message.
+
+        Each text line is sent as an individual 0xC0 record (matching z/OS
+        TRANSMIT output).  Sending all lines as one big block would exceed the
+        LRECL declared in the message INMR02 for any multi-line message.
+
+        RECFM=FB is used rather than the 0x0001 value seen in real z/OS XMITs:
+        the message data genuinely is fixed-length lrecl-byte records, and
+        z/OS RECEIVE uses the first INMR03 it encounters to determine the
+        incoming record format — leaving it as RECFM=U causes INMR065I/066I
+        on the dataset even though the dataset INMR03 correctly says FB.
+        '''
+        ebcdic_data = self._xmi_text_to_ebcdic(text.encode('utf-8'), lrecl)
+        data_len = len(ebcdic_data)
+        out = bytearray()
+        out += self._xmi_inmr03(lrecl, inmsize=data_len,
+                                recfm_bytes=self._xmi_recfm_byte('FB'))
+        # lrecl is 80 or 132 — both fit in a single segment (max 253 bytes)
+        for i in range(0, len(ebcdic_data), lrecl):
+            out += self._xmi_seg(0xC0, ebcdic_data[i:i + lrecl])
+        return bytes(out)
+
+    def _xmi_message_stream(self, text, lrecl):
+        '''Build INMR02 + INMR03 + DATA for the embedded message (combined).
+
+        Note: in a complete XMI, INMR02 must appear before all INMR03/DATA
+        records (use _xmi_message_inmr02 / _xmi_message_data separately when
+        building multi-file streams).
+        '''
+        return self._xmi_message_inmr02(text, lrecl) + self._xmi_message_data(text, lrecl)
+
 
     # -- IEBCOPY data block builders ------------------------------------ #
 
@@ -3356,20 +3557,24 @@ class XMIT:
         rec[0] = 0x01
         return bytes(rec)
 
-    def _xmi_directory_block(self, members):
+    def _xmi_directory_block(self, members, is_last=True):
         '''Build one 276-byte PDS directory block for *members*.
 
         *members* is a list of (name_str, ttr_int, ispf_bytes_or_None) triples,
         at most 5 per block when ISPF stats are included (42 bytes/entry) or
         8 per block without stats (12 bytes/entry).
 
+        *is_last*: True for the final (or only) directory block — appends the
+        end-of-directory sentinel (0xFF*8).  Intermediate blocks must pass
+        False so the reader does not stop scanning too early.
+
         Layout (276 bytes total):
           bytes  0- 7: key area (zeroes)
           bytes  8- 9: key_len = 8
           bytes 10-11: data_len = 256 (0x0100)
           bytes 12-19: last-referenced-member (zeroes)
-          bytes 20-21: used_length = entries + sentinel + 2 (the +2 includes itself)
-          bytes 22+  : directory entries then end-of-directory sentinel
+          bytes 20-21: used_length = entries [+ sentinel] + 2
+          bytes 22+  : directory entries [+ end-of-directory sentinel if last]
           remainder  : zero-padded to 276 bytes
 
         Each entry: 8-byte EBCDIC name + 3-byte TTR + 1-byte C-byte
@@ -3388,8 +3593,8 @@ class XMIT:
                 c_byte = b'\x00'
                 entries += ebcdic_name + ttr_bytes + c_byte
 
-        # End-of-directory sentinel: 0xFF * 8 + 3-byte TTR(0) + C-byte(0)
-        sentinel = b'\xff' * 8 + b'\x00\x00\x00\x00'
+        # End-of-directory sentinel: only in the last directory block
+        sentinel = b'\xff' * 8 + b'\x00\x00\x00\x00' if is_last else b''
 
         # used_length includes itself (the +2)
         used_length = len(entries) + len(sentinel) + 2
@@ -3404,19 +3609,14 @@ class XMIT:
             b'\x01\x00'         # data_len = 256
         )
 
-        # 8-byte PDS key: 0xFF*8 marks last/only directory block
+        # 8-byte PDS key
         pds_key = b'\xff' * 8
 
-        # 256-byte PDS data: used_length + entries + sentinel + zero-padding
+        # 256-byte PDS data: used_length + entries [+ sentinel] + zero-padding
         pds_data = struct.pack('>H', used_length) + bytes(entries) + bytes(sentinel)
         pds_data = pds_data.ljust(256, b'\x00')[:256]
 
-        dir_block = iebcopy_hdr + pds_key + pds_data  # 12 + 8 + 256 = 276 bytes
-
-        # Separate 12-byte directory EOM record (flag=0x88)
-        dir_eom = b'\x88' + b'\x00' * 11
-
-        return dir_block, dir_eom
+        return iebcopy_hdr + pds_key + pds_data  # 276 bytes
 
     def _xmi_member_block(self, name, data_bytes, ttr, blksize=3200, recfm='FB'):
         '''Build a list of IEBCOPY member data sub-block records.
@@ -3517,12 +3717,15 @@ class XMIT:
             ttr_map.append((name, i + 1, ebcdic_data, ispf))
 
         # Directory block(s): 5 entries/block max with ISPF stats (42 bytes each).
+        # Only the last block carries the end-of-directory sentinel (0xFF*8);
+        # intermediate blocks must not, or the reader stops scanning too early.
         chunk_size = 5
         dir_entries = [(name, ttr, ispf) for name, ttr, _, ispf in ttr_map]
-        for i in range(0, len(dir_entries), chunk_size):
-            dir_block, dir_eom = self._xmi_directory_block(dir_entries[i:i + chunk_size])
-            blocks.append(dir_block)
-            blocks.append(dir_eom)
+        chunks = [dir_entries[i:i + chunk_size]
+                  for i in range(0, len(dir_entries), chunk_size)]
+        for idx, chunk in enumerate(chunks):
+            blocks.append(self._xmi_directory_block(chunk, is_last=(idx == len(chunks) - 1)))
+        blocks.append(b'\x88' + b'\x00' * 11)  # single IEBCOPY directory EOM
 
         # Member blocks - each sub-block is a separate XMI data record
         for name, ttr, ebcdic_data, _ in ttr_map:
@@ -3536,7 +3739,7 @@ class XMIT:
 
     def _build_seq_xmi(self, file_path, dsn=None, lrecl=80, recfm='FB',
                        from_user='PYTHON', from_node='LOCAL',
-                       to_user='PYTHON', to_node='LOCAL'):
+                       to_user='PYTHON', to_node='LOCAL', resolved_msg=None):
         '''Build a sequential dataset XMI from a single file.'''
         raw = Path(file_path).read_bytes()
         ebcdic_data = self._xmi_encode_input(raw, lrecl, recfm)
@@ -3544,17 +3747,31 @@ class XMIT:
         if dsn is None:
             dsn = Path(file_path).stem.upper()
 
+        msg_text = resolved_msg[0] if resolved_msg is not None else None
+        msg_lrecl = resolved_msg[1] if resolved_msg is not None else 0
+        has_message = msg_text is not None
+
         out = bytearray()
-        out += self._xmi_inmr01(from_user, from_node, to_user, to_node)
-        out += self._xmi_inmr02_seq(dsn, lrecl, recfm, len(ebcdic_data))
-        out += self._xmi_inmr03(lrecl, inmsize=len(ebcdic_data))
+        out += self._xmi_inmr01(from_user, from_node, to_user, to_node,
+                                has_message=has_message)
+        # All INMR02s must be grouped before any INMR03/DATA (NETDATA protocol)
+        if has_message:
+            out += self._xmi_message_inmr02(msg_text, msg_lrecl)
+        dataset_file = 2 if has_message else 1
+        out += self._xmi_inmr02_seq(dsn, lrecl, recfm, len(ebcdic_data),
+                                    file_number=dataset_file)
+        # Message INMR03+DATA first, then dataset INMR03+DATA
+        if has_message:
+            out += self._xmi_message_data(msg_text, msg_lrecl)
+        out += self._xmi_inmr03(lrecl, inmsize=len(ebcdic_data),
+                               recfm_bytes=self._xmi_recfm_byte(recfm))
         out += self._xmi_data_record(ebcdic_data)
         out += self._xmi_inmr06()
         return bytes(out)
 
     def _build_pds_xmi(self, folder_path, dsn=None, lrecl=80, recfm='FB',
                        from_user='PYTHON', from_node='LOCAL',
-                       to_user='PYTHON', to_node='LOCAL'):
+                       to_user='PYTHON', to_node='LOCAL', resolved_msg=None):
         '''Build a PDS XMI from a folder (one level deep).'''
         folder = Path(folder_path)
         members_data = []
@@ -3591,11 +3808,24 @@ class XMIT:
                                                   from_user=from_user)
         inmsize = sum(len(b) for b in iebcopy_blocks)
 
+        msg_text = resolved_msg[0] if resolved_msg is not None else None
+        msg_lrecl = resolved_msg[1] if resolved_msg is not None else 0
+        has_message = msg_text is not None
+
         out = bytearray()
-        out += self._xmi_inmr01(from_user, from_node, to_user, to_node)
+        out += self._xmi_inmr01(from_user, from_node, to_user, to_node,
+                                has_message=has_message)
+        # All INMR02s must be grouped before any INMR03/DATA (NETDATA protocol)
+        if has_message:
+            out += self._xmi_message_inmr02(msg_text, msg_lrecl)
+        dataset_file = 2 if has_message else 1
         out += self._xmi_inmr02_pds(dsn, lrecl, recfm, len(members_data),
-                                    inmsize=inmsize)
-        out += self._xmi_inmr03(lrecl, inmsize=inmsize)
+                                    inmsize=inmsize, file_number=dataset_file)
+        # Message INMR03+DATA first, then dataset INMR03+DATA
+        if has_message:
+            out += self._xmi_message_data(msg_text, msg_lrecl)
+        out += self._xmi_inmr03(lrecl, inmsize=inmsize,
+                               recfm_bytes=self._xmi_recfm_byte(recfm))
         for block in iebcopy_blocks:
             out += self._xmi_data_record(block)
         out += self._xmi_inmr06()

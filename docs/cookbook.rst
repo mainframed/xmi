@@ -61,6 +61,41 @@ Creating XMI mainframe files (datasets)::
     )
 
 
+Creating an XMI with an embedded message (displayed on the z/OS terminal on ``RECEIVE``)::
+
+    create_xmi(
+        '/path/to/file/or/folder',
+        output_file='/path/to/your/XMI',
+        dsn='MY.DS',
+        message='Hello from Python!\nSee release notes inside.',
+    )
+
+``message_format`` controls the terminal width and maximum line count.
+The default is ``'80x32'`` (80 columns, 32 lines — suits a standard Model 3/4
+terminal).  Use ``'132x27'`` for wide terminals (Model 5, 132 columns, 27 lines)::
+
+    create_xmi(
+        '/path/to/file/or/folder',
+        output_file='/path/to/your/XMI',
+        dsn='MY.DS',
+        message='Wide banner line spanning 132 columns.',
+        message_format='132x27',
+    )
+
+Lines longer than the column limit are silently truncated; messages longer than
+the line limit are also truncated — both emit a warning to stderr.
+
+The message can also be read from a UTF-8 text file — useful for multi-line
+banners::
+
+    create_xmi(
+        '/path/to/file/or/folder',
+        output_file='/path/to/your/XMI',
+        dsn='MY.DS',
+        message_file='/path/to/banner.txt',
+        # message_format defaults to '80x32'; pass '132x27' for wide terminals
+    )
+
 This will create a XMI file at `/path/to/your/XMI` that is 'receivable' on z/OS.
 If the `/path/to/file/or/folder`  is a folder it will be stored in the XMI as 
 as PDS named `MY.DS`. If it's a single file it will be stored in the XMI as
@@ -128,6 +163,15 @@ After installation two commands are available from the terminal.
 
     # Package XMI files inside a PDS (auto-detects binary, uses RECFM=U)
     createxmi xmi_folder/ -o MULTI.XMI --dsn MULTI.PDS
+
+    # Embed a message displayed on z/OS RECEIVE (use \n for line breaks)
+    createxmi myfile.jcl -o SEQ.XMI --message "Hello from Python!\nSee release notes inside."
+
+    # Read message from a file (useful for banners or EBCDIC art)
+    createxmi myfile.jcl -o SEQ.XMI --message-file banner.txt
+
+    # Wide terminal format (132 columns, Model 5)
+    createxmi myfile.jcl -o SEQ.XMI --message-file banner-132.txt --message-format 132x27
 
     # Full option list
     createxmi --help

@@ -165,7 +165,7 @@ The following text units are optional:
 
 * INMFACK - notification receipt
 * INMFVERS - version number
-* INMNUMF - number of files
+* INMNUMF - number of files (``1`` for dataset only; ``2`` when a message is also present — the message counts as file 1, the dataset as file 2)
 * INMUSERP - user options
 
 
@@ -173,38 +173,41 @@ INRM02 Records
 ~~~~~~~~~~~~~~
 
 An XMI file may contain multiple INMR02 control records. These records
-always contains the following text units:
+always contain the following text units:
 
 * INMDSORG - dataset organization
-* INMLRECL - Record length
+* INMLRECL - record length
 * INMSIZE - size in bytes
-* INMUTILN - Utility program
+* INMUTILN - utility program
 
-Optional text units are:
+Optional text units include:
 
-* INMDSNAM - dataset name (messages do not have this text unit)
+* INMDSNAM - dataset name (absent on message INMR02 records — its absence is how parsers identify a message stream)
+* INMBLKSZ - block size
+* INMRECFM - record format
+* INMTERM  - present (with count=0) on the message INMR02 only; marks this record as a message stream rather than a dataset
 * INMCREAT - the date the file was created
 
 There are multiple other optional text units which can be read here:
 https://www.ibm.com/support/knowledgecenter/en/SSLTBW_2.3.0/com.ibm.zos.v2r3.ikjb400/inmr02.htm
 
-The utility program (*INMUTILN*) defines how the file was generated and it
-can be INMCOPY, or IEBCOPY, and AMSCIPHR:
+The utility program (*INMUTILN*) defines how the file was generated:
 
 * INMCOPY - converts a sequential dataset (file) for XMI
 * IEBCOPY - converts a partitioned dataset (folder) for XMI
-* AMSCIPHR - encrypts the files in XMI, this library does not
-  support extracting encrypted files.
+* AMSCIPHR - encrypts the files in XMI; this library does not support extracting encrypted files
 
-Depending on the dataset type the XMI may contain multiple INMR02 records. The
-process used when generating an XMI file is:
+Each INMR02 carries a 4-byte file ordinal field immediately after the record
+name.  This ordinal tells z/OS RECEIVE which INMR02 descriptor belongs to
+which INMR03 / data block pair.  The number of INMR02 records depends on
+the content:
 
-* If the dataset is sequential - INMCOPY -> Stop
-* If it is a partitioned dataset - IEBCOPY -> INMCOPY -> Stop
-* If there's also a message the first INMR02 record is INMCOPY and
-  doesn't have a dataset name (*INMDSNAM*).
+* Sequential dataset only — one INMR02 (INMCOPY, file ordinal 1)
+* Partitioned dataset only — two INMR02 records (IEBCOPY then INMCOPY, both file ordinal 1)
+* Sequential dataset + message — two INMR02 records: message INMCOPY (ordinal 1) then dataset INMCOPY (ordinal 2)
+* Partitioned dataset + message — three INMR02 records: message INMCOPY (ordinal 1) then PDS IEBCOPY + INMCOPY (both ordinal 2)
 
-Therefore, partitioned datasets will have two or more INMR02 records.
+Therefore, partitioned datasets will always have two or more INMR02 records.
 
 INRM03 Records
 ~~~~~~~~~~~~~~
