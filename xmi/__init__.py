@@ -46,7 +46,7 @@ xmi Python Library
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-__version__ = '1.0.2'
+__version__ = '1.0.3'
 __author__ = 'Philip Young, Henri Kuiper'
 __license__ = "GPL"
 
@@ -3558,24 +3558,23 @@ class XMIT:
         return bytes(rec)
 
     def _xmi_directory_block(self, members, is_last=True):
-        '''Build one 276-byte PDS directory block for *members*.
+        '''Build one PDS directory block for *members*.
 
         *members* is a list of (name_str, ttr_int, ispf_bytes_or_None) triples,
         at most 5 per block when ISPF stats are included (42 bytes/entry) or
         8 per block without stats (12 bytes/entry).
 
         *is_last*: True for the final (or only) directory block — appends the
-        end-of-directory sentinel (0xFF*8).  Intermediate blocks must pass
-        False so the reader does not stop scanning too early.
+        end-of-directory sentinel (0xFF*8) and 12 trailing zero bytes (embedded
+        directory EOM).  Intermediate blocks must pass False.
 
-        Layout (276 bytes total):
-          bytes  0- 7: key area (zeroes)
-          bytes  8- 9: key_len = 8
-          bytes 10-11: data_len = 256 (0x0100)
-          bytes 12-19: last-referenced-member (zeroes)
+        Layout per block:
+          bytes  0-11: IEBCOPY sub-block header (flag=0x00, key_len=8, data_len=256)
+          bytes 12-19: PDS key (0xFF*8)
           bytes 20-21: used_length = entries [+ sentinel] + 2
           bytes 22+  : directory entries [+ end-of-directory sentinel if last]
-          remainder  : zero-padded to 276 bytes
+          remainder  : zero-padded to 276 bytes total
+          [+ 12 zero bytes if is_last, matching z/OS IEBCOPY embedded dir-EOM]
 
         Each entry: 8-byte EBCDIC name + 3-byte TTR + 1-byte C-byte
                     [+ user-data halfwords if C-byte & 0x1F != 0]
@@ -3599,24 +3598,37 @@ class XMIT:
         # used_length includes itself (the +2)
         used_length = len(entries) + len(sentinel) + 2
 
-        # 12-byte IEBCOPY sub-block header: flag=0x08 (directory), TTR=0,
-        # key_len=8, data_len=256
+        # 12-byte IEBCOPY sub-block header: flag=0x00, TTR=0, key_len=8, data_len=256
+        # z/OS IEBCOPY uses flag=0x00 for directory blocks (not 0x08).
         iebcopy_hdr = (
-            b'\x08' +           # flag: directory block
+            b'\x00' +           # flag: 0x00 (same as data blocks — dir identified by key_len=8)
             b'\x00' * 5 +       # zeros
             b'\x00\x00\x00' +   # TTR = 0 for directory
             b'\x08' +           # key_len = 8
             b'\x01\x00'         # data_len = 256
         )
 
-        # 8-byte PDS key
-        pds_key = b'\xff' * 8
+        # 8-byte PDS key: for the last (or only) directory block this is 0xFF*8;
+        # for intermediate blocks it is the last member name in this block.
+        # IEBCOPY uses the key to determine whether more directory blocks follow.
+        if is_last:
+            pds_key = b'\xff' * 8
+        else:
+            last_name = members[-1][0].upper()[:8]
+            pds_key = last_name.encode(self.ebcdic).ljust(8, b'\x40')
 
         # 256-byte PDS data: used_length + entries [+ sentinel] + zero-padding
         pds_data = struct.pack('>H', used_length) + bytes(entries) + bytes(sentinel)
         pds_data = pds_data.ljust(256, b'\x00')[:256]
 
-        return iebcopy_hdr + pds_key + pds_data  # 276 bytes
+        block = iebcopy_hdr + pds_key + pds_data  # 276 bytes
+
+        # The last directory block carries 12 trailing zero bytes — the embedded
+        # directory EOM that z/OS IEBCOPY expects after all directory blocks.
+        if is_last:
+            block += b'\x00' * 12  # 288 bytes total for the last directory block
+
+        return block
 
     def _xmi_member_block(self, name, data_bytes, ttr, blksize=3200, recfm='FB'):
         '''Build a list of IEBCOPY member data sub-block records.
@@ -3637,7 +3649,9 @@ class XMIT:
                     b'\x00' +
                     struct.pack('>H', data_len))
 
-        eom = _hdr(0x80, 0)  # member EOM: flag=0x80, data_len=0
+        # Member EOM: flag=0x00, data_len=0 — embedded at end of last data sub-block
+        # (z/OS IEBCOPY embeds the EOM in the same physical record, not separately).
+        eom = _hdr(0x00, 0)
         records = []
 
         if not data_bytes:
@@ -3660,16 +3674,23 @@ class XMIT:
                 cur += rec_bytes
                 off += rdw
             if cur:
-                records.append(_hdr(0x00, len(cur)) + bytes(cur))
-            records.append(eom)
+                # Embed EOM in the last sub-block
+                records.append(_hdr(0x00, len(cur)) + bytes(cur) + eom)
+            else:
+                records.append(eom)
         else:
-            # FB/FS: split on blksize byte boundaries
+            # FB/FS: split on blksize byte boundaries; embed EOM in last chunk
             offset = 0
+            chunks = []
             while offset < len(data_bytes):
                 chunk = data_bytes[offset:offset + blksize]
                 offset += len(chunk)
-                records.append(_hdr(0x00, len(chunk)) + chunk)
-            records.append(eom)  # EOM as separate record
+                chunks.append(chunk)
+            for i, chunk in enumerate(chunks):
+                if i == len(chunks) - 1:
+                    records.append(_hdr(0x00, len(chunk)) + chunk + eom)
+                else:
+                    records.append(_hdr(0x00, len(chunk)) + chunk)
 
         return records
 
@@ -3725,7 +3746,8 @@ class XMIT:
                   for i in range(0, len(dir_entries), chunk_size)]
         for idx, chunk in enumerate(chunks):
             blocks.append(self._xmi_directory_block(chunk, is_last=(idx == len(chunks) - 1)))
-        blocks.append(b'\x88' + b'\x00' * 11)  # single IEBCOPY directory EOM
+        # No separate directory EOM record: the 12 trailing zero bytes in the
+        # last directory block serve as the embedded directory EOM (z/OS format).
 
         # Member blocks - each sub-block is a separate XMI data record
         for name, ttr, ebcdic_data, _ in ttr_map:
