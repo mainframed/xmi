@@ -39,7 +39,7 @@ Each label/dataset stored on a virtual tape is preceded by a header record
         - 0x01 ZLIB compression
 
 Following the header record is data. On some tapes (not all) optional
-label records can exist. These records identify metatdata about the dataset(s)
+label records can exist. These records identify metadata about the dataset(s)
 on the tape. Each label starts with 3 characters and a number and are 80 bytes
 long. In HET files labels are compressed based on the flag.
 
