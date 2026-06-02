@@ -3797,7 +3797,14 @@ class XMIT:
         '''Build a PDS XMI from a folder (one level deep).'''
         folder = Path(folder_path)
         members_data = []
-        for f in sorted(folder.iterdir()):
+        # Sort by EBCDIC collating sequence: letters (A-Z) sort before digits
+        # (0-9) in EBCDIC, which is the opposite of ASCII.  Using Python's
+        # default sort would produce wrong directory order whenever member names
+        # mix letters and digits (e.g. MEMBERA < MEMBER1 in EBCDIC but
+        # MEMBER1 < MEMBERA in ASCII), causing IEB189I on z/OS RECEIVE.
+        def _ebcdic_key(p):
+            return p.stem.upper()[:8].encode(self.ebcdic).ljust(8, b'\x40')
+        for f in sorted(folder.iterdir(), key=_ebcdic_key):
             if f.is_file():
                 name = f.stem.upper()[:8]
                 members_data.append((name, f.read_bytes()))
