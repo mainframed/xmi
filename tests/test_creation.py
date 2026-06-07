@@ -301,6 +301,34 @@ class TestRoundTrip(unittest.TestCase):
         self.assertIn('README', members)
         Path(fname).unlink()
 
+    def test_pds_directory_ebcdic_order(self):
+        # Regression: Python sort (ASCII) puts digits before letters, but EBCDIC
+        # puts letters before digits.  A folder with names like MEMBERA + MEMBER1
+        # must produce directory entries in EBCDIC order or z/OS IEBCOPY reports
+        # IEB189I "directory entry out of sequence".
+        with tempfile.TemporaryDirectory() as d:
+            folder = Path(d) / 'SORTTEST'
+            folder.mkdir()
+            # These names sort differently in ASCII vs EBCDIC:
+            # ASCII:  MEMBER1 < MEMBERA  (digit 0x31 < letter 0x41)
+            # EBCDIC: MEMBERA < MEMBER1  (letter 0xC1 < digit 0xF1)
+            names_on_disk = ['MEMBER1', 'MEMBERA', 'PART2', 'PARTA']
+            for name in names_on_disk:
+                (folder / name).write_text('content\n')
+            xmi_bytes = create_xmi(str(folder))
+
+        with tempfile.NamedTemporaryFile(suffix='.xmi', delete=False) as f:
+            f.write(xmi_bytes)
+            fname = f.name
+        x = XMIT(filename=fname, quiet=True)
+        x.open()
+        members = x.get_members(x.get_files()[0])
+        # Verify directory order is EBCDIC (letters before digits)
+        self.assertEqual(members, sorted(members,
+            key=lambda n: n.encode('cp500' if hasattr(x, 'ebcdic') else 'cp500').ljust(8, b'\x40')),
+            'directory entries must be in EBCDIC collating order')
+        Path(fname).unlink()
+
     def test_pds_more_than_five_members(self):
         # Regression: >5 members spanned two directory blocks; the reader
         # stopped at the first block's end-of-directory sentinel and dropped
