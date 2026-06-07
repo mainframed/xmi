@@ -23,7 +23,7 @@ copyright = '2021, Philip Young'
 author = 'Philip Young, Henri Kuiper'
 
 # The full version, including alpha/beta/rc tags
-release = '0.6'
+release = '1.0.3'
 
 
 # -- General configuration ---------------------------------------------------
