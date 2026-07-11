@@ -3287,6 +3287,25 @@ class XMIT:
         n = max(1, 3200 // lrecl)
         return n * lrecl
 
+    def _xmi_transport_size(self, blksize):
+        '''INMCOPY transport LRECL/BLKSIZE for a PDS built at *blksize*.
+
+        The largest logical record IEBCOPY unload data can produce is a
+        member's final sub-block: the data block itself, plus a 12-byte
+        IEBCOPY sub-block header, plus a 12-byte embedded end-of-member
+        marker, plus the 4-byte NETDATA RDW that wraps the whole record.
+        Both the INMR02 INMCOPY record (_xmi_inmr02_pds) and the COPYR1
+        transport-blocksize field (_xmi_copyr1, offset 14) must declare a
+        value that actually covers this, or a receiving RECV370/RECEIVE
+        allocates its work dataset too small and abends IEC036I 002-18 +
+        SC03 the moment a full-size final sub-block appears -- which is
+        common for any binary member several KB or larger, and invisible
+        to a local round-trip since readers ignore the transport values.
+        Returns (lrecl, blksize) for the transport record.
+        '''
+        lrecl = blksize + 12 + 12 + 4
+        return lrecl, lrecl + 4
+
     # -- Text-to-EBCDIC encoder ---------------------------------------- #
 
     def _xmi_text_to_ebcdic(self, text_bytes, lrecl):
@@ -3436,13 +3455,16 @@ class XMIT:
             self._xmi_dsn_tu(dsn)                                      # INMDSNAM
         )
         # Second INMR02: INMCOPY (transport)
-        # LRECL/BLKSIZE are fixed transport values (not dataset values)
+        # LRECL/BLKSIZE are transport values, sized to cover the largest
+        # record _xmi_build_iebcopy can actually emit at this blksize --
+        # see _xmi_transport_size.
+        transport_lrecl, transport_blksz = self._xmi_transport_size(blksize)
         tu2 = (
             self._xmi_tu(0x1028, 'INMCOPY'.encode(self.ebcdic)) +      # INMUTILN
             self._xmi_tu(0x102C, struct.pack('>I', inmsize)) +         # INMSIZE
             self._xmi_tu(0x003C, dsorg_ps) +                           # INMDSORG
-            self._xmi_tu(0x0042, struct.pack('>I', 3216)) +            # INMLRECL (transport)
-            self._xmi_tu(0x0030, struct.pack('>I', 3220)) +            # INMBLKSZ (transport)
+            self._xmi_tu(0x0042, struct.pack('>I', transport_lrecl)) + # INMLRECL (transport)
+            self._xmi_tu(0x0030, struct.pack('>I', transport_blksz)) + # INMBLKSZ (transport)
             self._xmi_tu(0x0049, b'\x48\x02')                          # INMRECFM (VS)
         )
         return (self._xmi_ctrl_seg('INMR02', tu1, numfiles=file_number) +
@@ -3543,8 +3565,11 @@ class XMIT:
         struct.pack_into('>H', rec, 8, lrecl)
         # DS1RECFM at offset 10
         rec[10] = recfm_byte
-        # file_tape_blocksize at offset 14 = INMCOPY transport blocksize (3220)
-        struct.pack_into('>H', rec, 14, 3220)
+        # file_tape_blocksize at offset 14 = INMCOPY transport blocksize --
+        # must match _xmi_inmr02_pds's INMCOPY INMBLKSZ, see
+        # _xmi_transport_size.
+        _, transport_blksz = self._xmi_transport_size(blksize)
+        struct.pack_into('>H', rec, 14, transport_blksz)
         return bytes(rec)
 
     def _xmi_copyr2(self):

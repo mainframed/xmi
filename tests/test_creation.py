@@ -352,6 +352,99 @@ class TestRoundTrip(unittest.TestCase):
         Path(fname).unlink()
 
 
+def _max_netdata_record(data):
+    '''Walk a NETDATA segment stream; return the longest logical record.
+
+    Segment: length byte (incl. itself + flag) + flag + payload. Flag
+    0x20 = control record; data records span segments via first (0x80) /
+    middle (0x00) / last (0x40) / single (0xC0) flags.
+    '''
+    pos, cur, biggest = 0, 0, 0
+    while pos < len(data):
+        seglen = data[pos]
+        if seglen == 0:
+            break
+        flag = data[pos + 1]
+        if not flag & 0x20:
+            cur += seglen - 2
+            if flag & 0x40 or (flag & 0xC0) == 0xC0:
+                biggest = max(biggest, cur)
+                cur = 0
+        pos += seglen
+    return biggest
+
+
+class TestTransportSize(unittest.TestCase):
+    '''INMCOPY transport LRECL/BLKSIZE must cover the largest record a PDS
+    build can actually emit, or a real z/OS RECEIVE/RECV370 allocates its
+    work dataset too small and abends IEC036I 002-18 + SC03 the moment a
+    full-size final sub-block appears. A local round-trip never catches
+    this because parsing ignores the transport values -- these tests
+    inspect the declared transport fields directly, and simulate the
+    on-target constraint by scanning the actual NETDATA record lengths.
+    '''
+
+    def test_transport_size_covers_default_fb_blksize(self):
+        builder = XMIT(encoding='cp500')
+        lrecl, blksz = builder._xmi_transport_size(3200)
+        self.assertEqual(lrecl, 3200 + 12 + 12 + 4)
+        self.assertEqual(blksz, lrecl + 4)
+
+    def test_inmr02_pds_declares_computed_transport_size_not_hardcoded(self):
+        builder = XMIT(encoding='cp500')
+        rec = builder._xmi_inmr02_pds('TEST.PDS', 80, 'FB', 2, inmsize=1000)
+        expected_lrecl, expected_blksz = builder._xmi_transport_size(3200)
+        # The old hardcoded values must NOT appear as the declared transport
+        # size; the computed ones must.
+        self.assertNotEqual((expected_lrecl, expected_blksz), (3216, 3220))
+        self.assertIn(struct.pack('>I', expected_lrecl), rec)
+        self.assertIn(struct.pack('>I', expected_blksz), rec)
+
+    def test_copyr1_transport_blocksize_matches_inmr02(self):
+        builder = XMIT(encoding='cp500')
+        _, expected_blksz = builder._xmi_transport_size(3200)
+        self.assertNotEqual(expected_blksz, 3220)
+        copyr1 = builder._xmi_copyr1(80, 'FB', 3200)
+        self.assertEqual(struct.unpack('>H', copyr1[14:16])[0], expected_blksz)
+
+    def test_full_last_block_member_fits_declared_transport_lrecl(self):
+        # Reproduces the OPNTERSE bug: a binary member whose length is an
+        # exact multiple of the PDS blksize, guaranteeing the last IEBCOPY
+        # sub-block is completely full -- the worst case for the transport
+        # LRECL/BLKSIZE declaration. Mirrors OPNTERSE's actual layout (task
+        # JCL text member + nested-XMIT binary member) so the folder is
+        # "mixed" and stays RECFM=FB -- an all-binary folder would
+        # auto-switch to RECFM=U (blksize 6233) via _build_pds_xmi's
+        # auto-detection, which is a different scenario, not this one.
+        builder = XMIT(encoding='cp500')
+        blksize = builder._xmi_blksize(80, 'FB')
+        with tempfile.TemporaryDirectory() as d:
+            binary_payload = (b'\xff\xfe\x00\x01' * (blksize // 4)) * 3
+            self.assertEqual(len(binary_payload) % blksize, 0)
+            (Path(d) / 'BIGMEMBR.bin').write_bytes(binary_payload)
+            (Path(d) / 'TASKJCL.jcl').write_text('//TASKJCL JOB\n')
+            xmi_bytes = builder.build_xmi(d, dsn='TEST.PDS', from_user='TEST',
+                                           from_node='TEST', to_user='TEST',
+                                           to_node='TEST')
+
+        declared_lrecl, _ = builder._xmi_transport_size(blksize)
+        biggest = _max_netdata_record(xmi_bytes)
+        self.assertLessEqual(
+            biggest + 4, declared_lrecl,
+            'largest NETDATA record {} (+4 RDW) exceeds declared transport '
+            'LRECL {} -- a real RECV370/RECEIVE would abend IEC036I 002-18'
+            .format(biggest, declared_lrecl))
+
+        # And the file must still parse correctly (round-trip sanity).
+        with tempfile.NamedTemporaryFile(suffix='.xmi', delete=False) as f:
+            f.write(xmi_bytes)
+            fname = f.name
+        x = XMIT(filename=fname, quiet=True)
+        x.open()
+        self.assertIn('BIGMEMBR', x.get_members(x.get_files()[0]))
+        Path(fname).unlink()
+
+
 class TestPublicAPI(unittest.TestCase):
 
     def test_create_xmi_with_inline_message(self):
