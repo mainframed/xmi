@@ -6,7 +6,7 @@ library we will talk about how it produces PDS unloads and their various
 controls records as well as the directory structure.
 
 ``IEBCOPY`` is used to *unload* partitioned datasets to a tape,
-vitual tape, xmi, file etc. Its format is made up of controls records (COPYR1
+virtual tape, xmi, file etc. Its format is made up of controls records (COPYR1
 and COPYR2), a listing of members and their metadata followed by the PDS
 members file data.
 
@@ -41,7 +41,7 @@ Directory Information
 ~~~~~~~~~~~~~~~~~~~~~
 
 Following the control records is the directory information. This section is
-vairable length and can span multiple blocks. It contains the member names
+variable length and can span multiple blocks. It contains the member names
 and metadata about the member. This section begins with::
 
     00 00 00 00 00 00 00 00

@@ -33,7 +33,7 @@ for f in het_obj.get_files():
         print(f)
 ```
 
-Print JSON metatdata::
+Print JSON metadata::
 
 ```python
 print(xmi_obj.get_json())
