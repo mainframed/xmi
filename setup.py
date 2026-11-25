@@ -26,7 +26,7 @@ README = (HERE / "README.md").read_text()
 
 # This call to setup() does all the work
 setup(
-    name="xmi-reader",
+    name="xmilib",
     version=get_version("xmi/__init__.py"),
     description="Open and extract (unload) XMI/AWS/HET mainframe files.",
     long_description=README,

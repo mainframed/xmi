@@ -7,7 +7,7 @@ Open and extract (unload) XMI/AWS/HET mainframe files.
 You can install the **xmi** library from PyPI using:
 
 ```
-python3 -m pip install xmi-reader
+python3 -m pip install xmilib
 ```
 
 ## How to Use
@@ -81,7 +81,7 @@ xmi_obj.open()
 
 ## Command-line tools
 
-After `pip install xmi-reader` two commands are available in your PATH.
+After `pip install xmilib` two commands are available in your PATH.
 
 **`extractxmi`** — open, list and extract XMI / AWS / HET files:
 
