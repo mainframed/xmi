@@ -46,7 +46,7 @@ xmi Python Library
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-__version__ = "1.1.1"
+__version__ = "1.1.2"
 __author__ = 'Philip Young, Henri Kuiper'
 __license__ = "GPL"
 
@@ -1931,8 +1931,18 @@ class XMIT:
         record_data = b''
         loc = 0
         while loc < len(self.xmit_object):
+            if loc + 2 > len(self.xmit_object):
+                raise ParseError("truncated NETDATA segment header at offset {}".format(loc))
             section_length = self.__get_int(self.xmit_object[loc:loc + 1])
             flag = self.__get_int(self.xmit_object[loc + 1:loc + 2])
+            # The length includes the 2-byte length/flag header, so a
+            # valid segment is at least 2 bytes. Anything less would never
+            # advance (endless loop on corrupt input).
+            if section_length < 2:
+                raise ParseError("invalid NETDATA segment length {} at offset {}".format(section_length, loc))
+            if loc + section_length > len(self.xmit_object):
+                raise ParseError("NETDATA segment at offset {} (length {}) runs past end of file ({} bytes)".format(
+                    loc, section_length, len(self.xmit_object)))
 
             if 0x20 != (0x20 & flag):  # If we're not a control record
 
@@ -2518,6 +2528,8 @@ class XMIT:
                 block_size = self.__get_int(dataset[loc:loc + 2])
                 seg_size = self.__get_int(dataset[loc + 4:loc + 6])
                 self.logger.debug("BDW Size: {} SDW Size: {}".format(block_size, seg_size))
+                if block_size < 8:
+                    raise ParseError("invalid PDS directory block size {} at offset {}".format(block_size, loc))
                 member_dir += dataset[loc + 8:loc + block_size]  # skip BDW and SDW
                 loc += block_size
                 if self.__all_members(member_dir):
@@ -2533,6 +2545,8 @@ class XMIT:
                 block_size = self.__get_int(dataset[loc:loc + 2])
                 seg_size = self.__get_int(dataset[loc + 4:loc + 6])
                 self.logger.debug("BDW Size: {} SDW Size: {}".format(block_size, seg_size))
+                if block_size < 8:
+                    raise ParseError("invalid PDS member block size {} at offset {}".format(block_size, loc))
                 member_files += dataset[loc + 8:loc + block_size]  # skip BDW and SDW
                 loc += block_size
                 if member_files[-12:] == b'\x00' * 12:
@@ -2692,6 +2706,8 @@ class XMIT:
             while loc < directory_len:
                 if directory_members_info[loc:loc + 8] == b'\xff' * 8:
                     return True
+                if loc + 12 > len(directory_members_info):
+                    raise ParseError("truncated PDS directory entry at block offset {}".format(block_loc))
                 loc = loc + 8 + 3 + 1 + (directory_members_info[loc + 11] & 0x1F) * 2
             block_loc += 276
         return False
@@ -2719,6 +2735,8 @@ class XMIT:
                     loc = len(directory)
                     break
                 else:
+                    if loc + 12 > len(directory_members_info):
+                        raise ParseError("truncated PDS directory entry at block offset {}".format(block_loc))
                     members[member_name] = {
                         'ttr' : self.__get_int(directory_members_info[loc + 8:loc + 11]),
                         'alias' : True if 0x80 == (directory_members_info[loc + 11] & 0x80) else False,
@@ -2819,7 +2837,7 @@ class XMIT:
             member_ttr = self.__get_int(member_blocks[loc + 6:loc + 9])
 
             if PDS_or_PDSE == 'PDSE' and record_closed:
-                while True:
+                while loc + 12 <= len(member_blocks):
                     member_ttr = self.__get_int(member_blocks[loc + 6:loc + 9])
                     member_data_len = self.__get_int(member_blocks[loc + 10:loc + 12])
                     if member_ttr != prev_ttr:
@@ -3184,6 +3202,10 @@ class XMIT:
                 # this record can be empty so we skip it
                 self.logger.debug('This is a message')
                 self.msg = True
+                loc += 4
+            elif num == 0 and key != 0x1026:
+                # Any other empty text unit: skip its 4-byte header, or
+                # the loop would never advance.
                 loc += 4
 
             for i in range(0, num):

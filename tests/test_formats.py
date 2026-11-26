@@ -820,3 +820,89 @@ class TestMemberWithoutDirectoryEntry(unittest.TestCase):
             x.unload_files()
             x.get_xmit_json()
             x.get_json()
+
+
+XMITMG = Path(__file__).parent / 'samples' / 'xmitmg'
+
+
+class TestCorruptXmiDoesNotHang(unittest.TestCase):
+    '''Regression: parse_xmi() looped forever on a zero-length segment.
+
+    Fixtures are the XMIT Manager test set (CBT916, XMITMG64/Test Xmits),
+    renamed without spaces. pds_bad_directory.xmt is the deliberately
+    broken "pds Intentional error with pds directory.xmt": a NETDATA
+    segment at offset 895 has length 0. Before 1.1.2 open() never
+    returned. It must now raise ParseError quickly.
+    '''
+
+    def _open_in_child(self, path, timeout=10):
+        # Run in a subprocess so a regression fails the test instead of
+        # hanging the whole suite.
+        import subprocess
+        code = ('import sys; sys.path.insert(0, sys.argv[1]); import xmi\n'
+                'from xmi.formats import ParseError\n'
+                'try:\n'
+                '    xmi.XMIT(filename=sys.argv[2], quiet=True).open()\n'
+                'except ParseError as e:\n'
+                '    print("ParseError:", e); sys.exit(3)\n')
+        return subprocess.run(
+            [sys.executable, '-c', code,
+             str(Path(__file__).parent.parent), str(path)],
+            capture_output=True, text=True, timeout=timeout)
+
+    def test_bad_directory_raises_parse_error(self):
+        import time
+        start = time.monotonic()
+        r = self._open_in_child(XMITMG / 'pds_bad_directory.xmt')
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn('segment length 0 at offset 895', r.stdout)
+        self.assertLess(time.monotonic() - start, 5)
+
+    def test_segment_past_end_raises(self):
+        data = (XMITMG / 'seq_text.xmt').read_bytes()
+        # Keep the INMR01 header, then a segment claiming 200 bytes.
+        first = data[0]
+        broken = data[:first] + bytes([200, 0x20]) + b'\x00' * 10
+        x = xmi.XMIT(quiet=True)
+        x.set_xmit_object(broken)
+        with self.assertRaises(F.ParseError):
+            x.parse_xmi()
+
+
+class TestXmitManagerSamples(unittest.TestCase):
+    '''Good XMIT Manager samples (same source as above).'''
+
+    def _open(self, name, out):
+        x = xmi.XMIT(filename=str(XMITMG / name), outputfolder=out, quiet=True)
+        x.open()
+        x.unload_files()
+        x.get_xmit_json()
+        return x
+
+    def test_pds_text(self):
+        with tempfile.TemporaryDirectory() as out:
+            x = self._open('pds_text.xmt', out)
+            self.assertEqual(x.get_files(), ['SYS1.TEXT.PDS'])
+            self.assertEqual(
+                x.get_members('SYS1.TEXT.PDS'),
+                ['@CLIENT', '@SERVER', 'LINKCHK', 'RENMASK', 'RXCLIENT',
+                 'RXSERVER', 'XMITDOWN'])
+
+    def test_pds_binary(self):
+        with tempfile.TemporaryDirectory() as out:
+            x = self._open('pds_binary.xmt', out)
+            self.assertEqual(
+                x.get_members('SYS1.BINARY.PDS'),
+                ['DB2WWWX', 'FORMWWWX', 'IMSWWWX', 'SOCKS'])
+
+    def test_seq_text(self):
+        with tempfile.TemporaryDirectory() as out:
+            x = self._open('seq_text.xmt', out)
+            self.assertEqual(x.get_files(), ['SYS1.TEXT.SEQ'])
+
+    def test_seq_binary_with_message(self):
+        with tempfile.TemporaryDirectory() as out:
+            x = self._open('seq_binary_msg.xmt', out)
+            self.assertEqual(x.get_files(), ['SYS1.BINARY.SEQ'])
+            self.assertTrue(x.has_message())
+            self.assertIn('Xmit Manager', x.get_message())
