@@ -20,6 +20,7 @@ layout it follows.
 import os
 import random
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -756,3 +757,66 @@ class TestIntegration(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
+
+
+class TestMemberWithoutDirectoryEntry(unittest.TestCase):
+    '''Regression: members whose data has no directory entry.
+
+    Real CBT load libraries (CBT186/222/731/797/826/982 LOADLIB.xmi,
+    COV466 FILE218/219) contain member data that no directory entry
+    points to. The parser names those ``DELETED??n``, and before 1.1.1
+    gave them only an ``alias`` key, so get_member_info() raised
+    KeyError: 'ispf' during unload_files().
+
+    Synthetic PDS built with XMIT.build_xmi(), with its directory edited:
+      AAA     ISPF stats, TTR 1
+      ALIASA  alias of AAA (C-byte X'80', TTR 1), no user data
+      BBB     no user data (non-ISPF entry), TTR 2
+      CCC     data at TTR 3 but no directory entry -> DELETED??n
+    '''
+
+    def _build(self):
+        builder = xmi.XMIT(encoding='cp1047')
+        orig = builder._xmi_directory_block
+
+        def directory_block(members, is_last=True):
+            by_name = {m[0]: m for m in members}
+            edited = [by_name['AAA'],
+                      ('ALIASA', by_name['AAA'][1], None),
+                      ('BBB', by_name['BBB'][1], None)]
+            block = bytearray(orig(edited, is_last))
+            # Set the alias bit on ALIASA's C-byte (entry offset 11).
+            name = 'ALIASA'.encode('cp1047').ljust(8, b'\x40')
+            pos = block.index(name)
+            block[pos + 11] |= 0x80
+            return bytes(block)
+
+        builder._xmi_directory_block = directory_block
+        with tempfile.TemporaryDirectory() as d:
+            for n in ('AAA', 'BBB', 'CCC'):
+                (Path(d) / (n + '.txt')).write_text(
+                    '//{} JOB\n//STEP EXEC PGM=IEFBR14\n'.format(n))
+            return builder.build_xmi(d, dsn='TEST.PDS')
+
+    def test_unload_and_json(self):
+        data = self._build()
+        with tempfile.TemporaryDirectory() as out:
+            src = Path(out) / 'in.xmi'
+            src.write_bytes(data)
+            x = xmi.XMIT(filename=str(src), outputfolder=out + '/x', quiet=True)
+            x.open()
+            members = x.get_members('TEST.PDS')
+            orphans = [m for m in members if m.startswith('DELETED??')]
+            self.assertEqual(len(orphans), 1)
+            self.assertIn('ALIASA', members)
+            for m in members:
+                info = x.get_member_info('TEST.PDS', m)
+                self.assertIn('size', info)
+            self.assertEqual(
+                x.get_member_info('TEST.PDS', 'ALIASA')['alias'], 'AAA')
+            self.assertNotIn('modified', x.get_member_info('TEST.PDS', 'BBB'))
+            self.assertNotIn(
+                'modified', x.get_member_info('TEST.PDS', orphans[0]))
+            x.unload_files()
+            x.get_xmit_json()
+            x.get_json()

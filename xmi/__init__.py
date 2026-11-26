@@ -46,7 +46,7 @@ xmi Python Library
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 __author__ = 'Philip Young, Henri Kuiper'
 __license__ = "GPL"
 
@@ -958,7 +958,7 @@ class XMIT:
         if member not in files[pds]['members']:
             raise Exception("Member {} not found in {}".format(member, pds))
 
-        if files[pds]['members'][member]['alias']:
+        if files[pds]['members'][member].get('alias'):
             member = self.get_alias(pds, member)
             if member is None:
                 raise Exception("Member Alias target not found")
@@ -971,11 +971,12 @@ class XMIT:
             info['mvs_format'] = files[pds]['members'][member]['mvs_format']
         if 'mvs_codepage' in files[pds]['members'][member]:
             info['codepage'] = files[pds]['members'][member]['mvs_codepage']
-        if files[pds]['members'][member]['ispf']:
-            info['modified'] = files[pds]['members'][member]['ispf']['modifydate']
-            info['owner'] = files[pds]['members'][member]['ispf']['user']
-            info['version'] = files[pds]['members'][member]['ispf']['version']
-            info['created'] = files[pds]['members'][member]['ispf']['createdate']
+        ispf = files[pds]['members'][member].get('ispf')
+        if ispf:
+            info['modified'] = ispf['modifydate']
+            info['owner'] = ispf['user']
+            info['version'] = ispf['version']
+            info['created'] = ispf['createdate']
 
         info['RECFM'] = files[pds]['COPYR1']['DS1RECFM']
         info['LRECL'] = files[pds]['COPYR1']['DS1LRECL']
@@ -2842,7 +2843,16 @@ class XMIT:
                 self.logger.debug("Encoutered more files than members names: Total members: {} Current file: {}".format(len(ttrs), ttr_location+1))
                 sorted_ttrs.append("??{}".format(deleted_num))
                 ttrs["??{}".format(deleted_num)] = "DELETED??{}".format(deleted_num)
-                member_dict['members'][ "DELETED??{}".format(deleted_num)] = { 'alias' : False}
+                # Same keys as a directory entry (see __get_members_info) so
+                # readers can rely on them. No directory entry: no stats.
+                member_dict['members']["DELETED??{}".format(deleted_num)] = {
+                    'ttr': member_ttr,
+                    'alias': False,
+                    'halfwords': 0,
+                    'notes': 0,
+                    'parms': b'',
+                    'ispf': False,
+                }
                 deleted_num += 1
 
             ttr_num = sorted_ttrs[ttr_location]
