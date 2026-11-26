@@ -81,7 +81,7 @@ xmi_obj.open()
 
 ## Command-line tools
 
-After `pip install xmilib` two commands are available in your PATH.
+After `pip install xmilib` three commands are available in your PATH.
 
 **`extractxmi`** — open, list and extract XMI / AWS / HET files:
 
@@ -103,6 +103,16 @@ createxmi myfolder/ -o MY.XMI --from-user IBMUSER        # set ISPF owner
 createxmi myfile.jcl -o SEQ.XMI --dsn MY.SEQ             # file → sequential XMI
 createxmi xmi_folder/ -o MULTI.XMI --dsn MULTI.PDS       # XMI-in-XMI container
 createxmi --help                                          # full option list
+```
+
+**`mvsfile`** identifies MVS binary formats that `file` reports as `data`.
+These include load modules, object decks (OBJ/XOBJ), GOFF, IEBCOPY unloads, TERSE, SMF and program
+objects. Extracted members get a matching extension (`.lmd`, `.obj`, `.gof`, ...)
+and an `mvs_format` field. See `docs/formats.rst`.
+
+```bash
+mvsfile DAF.bin                   # DAF.bin: MVS load module (unloaded PDS member, RECFM=U) (high)
+mvsfile -v DAF.bin                # parsed details (CSECTs, AMODE/RMODE, IDR) as JSON
 ```
 
 ## More Information

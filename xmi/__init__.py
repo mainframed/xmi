@@ -46,7 +46,7 @@ xmi Python Library
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-__version__ = "1.0.7"
+__version__ = "1.1.0"
 __author__ = 'Philip Young, Henri Kuiper'
 __license__ = "GPL"
 
@@ -69,6 +69,9 @@ import time
 import magic
 import mimetypes
 import sys
+
+from . import formats
+from .formats import identify, FormatInfo, ParseError
 
 # As documented here:
 #     https://www.ibm.com/support/knowledgecenter/en/SSLTBW_2.1.0/com.ibm.zos.v2r1.ikjb400/txunit.htm
@@ -154,7 +157,8 @@ def open_file(
         quiet=False,
         force_convert=False,
         binary=False,
-        modifydate=False
+        modifydate=False,
+        detect_codepage=True
     ):
     '''Opens a XMI/AWS/HET file and returns an XMIT object
 
@@ -184,6 +188,13 @@ def open_file(
         modifydate (bool): If created date/last modified date information is
             available change the last modified date of the extracted file to
             match. Defaults to False.
+        detect_codepage (bool): Check EBCDIC text members against other
+            EBCDIC code pages and convert with the best fit when
+            ``encoding`` clearly does not fit (e.g. cp1047 C source, cp273
+            German text). Text that ``encoding`` decodes as well as any
+            other page is converted with ``encoding`` as before. The page
+            used is recorded as ``codepage`` in ``get_member_info()``.
+            Defaults to True.
     '''
     mfile = XMIT(
         filename=filename,
@@ -196,7 +207,8 @@ def open_file(
         quiet=quiet,
         force_convert=force_convert,
         binary=binary,
-        modifydate=modifydate
+        modifydate=modifydate,
+        detect_codepage=detect_codepage
     )
     mfile.open()
     return mfile
@@ -438,6 +450,13 @@ class XMIT:
         modifydate (bool): If created date/last modified date information is
             available change the last modified date of the extracted file to
             match. Defaults to False.
+        detect_codepage (bool): Check EBCDIC text members against other
+            EBCDIC code pages and convert with the best fit when
+            ``encoding`` clearly does not fit (e.g. cp1047 C source, cp273
+            German text). Text that ``encoding`` decodes as well as any
+            other page is converted with ``encoding`` as before. The page
+            used is recorded as ``codepage`` in ``get_member_info()``.
+            Defaults to True.
     """
 
     def __init__(self,
@@ -451,7 +470,8 @@ class XMIT:
                  quiet=False,
                  force_convert=False,
                  binary=False,
-                 modifydate=False
+                 modifydate=False,
+                 detect_codepage=True
                 ):
 
         self.filename = filename
@@ -474,6 +494,7 @@ class XMIT:
         self.xmit = {}
         self.tape = {}
         self.modifydate = modifydate
+        self.detect_codepage = detect_codepage
         self.loglevel = loglevel
         self.overwrite = True
 
@@ -631,6 +652,18 @@ class XMIT:
         self.logger.debug(
             "Changing codepage from {} to {}".format(self.ebcdic, codepage))
         self.ebcdic = codepage
+
+    def set_detect_codepage(self, setting=True):
+        '''
+        When True (the default) EBCDIC text members are checked against
+        other EBCDIC code pages and converted with the best fit if the
+        configured code page clearly does not fit. See ``open_file()``.
+
+        Warning:
+            If this setting changed after a file has been opened/parsed
+            you must reload the file for the changes to take effect.
+        '''
+        self.detect_codepage = setting
 
     def set_force(self, setting=True):
         '''
@@ -886,6 +919,12 @@ class XMIT:
         The returned dict contains:
 
             * mimetype (str): the member mimetype
+            * mvs_format (str): detected MVS binary format (e.g. ``load-module``,
+              ``obj``, ``goff``) when libmagic only reports binary data. See
+              ``get_member_format()`` for parsed details.
+            * codepage (str): for EBCDIC text that libmagic did not
+              recognise, the code page it was detected in and converted
+              with
             * extenstion (str): the member extention based on mimetype
             * RECFM (str): the member record format
             * LRECL (int): the member line/record length
@@ -928,6 +967,10 @@ class XMIT:
             info['mimetype'] = files[pds]['members'][member]['mimetype']
         if 'extension' in files[pds]['members'][member]:
             info['extension'] = files[pds]['members'][member]['extension']
+        if 'mvs_format' in files[pds]['members'][member]:
+            info['mvs_format'] = files[pds]['members'][member]['mvs_format']
+        if 'mvs_codepage' in files[pds]['members'][member]:
+            info['codepage'] = files[pds]['members'][member]['mvs_codepage']
         if files[pds]['members'][member]['ispf']:
             info['modified'] = files[pds]['members'][member]['ispf']['modifydate']
             info['owner'] = files[pds]['members'][member]['ispf']['user']
@@ -1655,13 +1698,16 @@ class XMIT:
             num /= 1024.0
         return "{:.1f}{}".format(num, 'Y')
 
-    def convert_text_file(self, ebcdic_text, recl):
+    def convert_text_file(self, ebcdic_text, recl, codepage=None):
         '''
         Converts EBCDIC files to utf-8.
 
         Arguments:
             * ebcdic_text (bytes): EBCDIC data to convert
             * lrecl (int): How long each line is
+            * codepage (str): EBCDIC code page to use instead of the one set
+              with ``set_codepage()`` (used for text whose code page was
+              detected, see ``xmi.formats.detect_ebcdic_codepage``)
 
         Why lrecl? Mainframe fixed length (RECFM = F) files have no concept of
         line terminators, each line is the exact same length padded to LRECL
@@ -1674,8 +1720,11 @@ class XMIT:
         numbers in them). By default those columns are removed if they only
         contain numbers. To disable this feature use ``set_unnum(False)``.
         '''
-        self.logger.debug("Converting EBCDIC file to UTF-8. Using EBCDIC codepage: '{}' LRECL: {} UnNum: {} Force: {}".format(self.ebcdic, recl, self.unnum, self.force))
-        asciifile = ebcdic_text.decode(self.ebcdic)
+        codepage = codepage or self.ebcdic
+        self.logger.debug("Converting EBCDIC file to UTF-8. Using EBCDIC codepage: '{}' LRECL: {} UnNum: {} Force: {}".format(codepage, recl, self.unnum, self.force))
+        # errors='replace': a detected code page was only checked against a
+        # sample, and some pages (cp424, cp420, ...) leave bytes unassigned
+        asciifile = ebcdic_text.decode(codepage, errors='replace')
         seq_file = []
         if recl < 1:
             return asciifile + '\n'
@@ -2338,16 +2387,27 @@ class XMIT:
                 if self.force:
                     extention = ".txt"
 
-                if filetype == 'text/plain' or datatype != 'binary' or self.force:
+                mvs = self.__identify_mvs_format(filetype, tape_file)
+                text_codepage = None
+                detected_text = False
+                if mvs:
+                    extention = mvs['mvs_extension']
+                    detected_text = mvs['mvs_format'] == 'ebcdic-text'
+
+                is_text = filetype == 'text/plain' or datatype != 'binary' or self.force or detected_text
+                if is_text:
+                    text_codepage = self.__better_codepage(tape_file)
+
+                if is_text:
 
                     if 'lrecl' in HDR2:
                         if 'F' in HDR2['recfm']:
-                            tape_text = self.convert_text_file(tape_file, HDR2['lrecl'])
+                            tape_text = self.convert_text_file(tape_file, HDR2['lrecl'], codepage=text_codepage)
                         # elif 'V' in HDR2['recfm']:
                         #     for record in vb_tape_file:
                         #         tape_text += self.convert_text_file(record, len(record)).rstrip() + '\n'
                     else:
-                        tape_text = self.convert_text_file(tape_file, self.manual_recordlength)
+                        tape_text = self.convert_text_file(tape_file, self.manual_recordlength, codepage=text_codepage)
                 else:
                     tape_text = ''
                 self.logger.debug("Record {}: filetype: {} datatype: {} size: {}".format(file_num, filetype, datatype, len(tape_file)))
@@ -2360,6 +2420,10 @@ class XMIT:
                         'extension' : extention,
                         'num' : file_num
                         }
+                    if mvs:
+                        output.update(mvs)
+                    if tape_text and (text_codepage or detected_text):
+                        output['mvs_codepage'] = text_codepage or self.ebcdic
 
                     if tape_text:
                         output['text'] = tape_text
@@ -2880,20 +2944,37 @@ class XMIT:
             extention = ".xmi"
             filetype = 'application/xmit'
 
-        if filetype == 'text/plain' or datatype != 'binary' or self.force:
+        mvs = self.__identify_mvs_format(filetype, file_data)
+        # EBCDIC text that libmagic missed: convert it with the code page
+        # it decodes best with.
+        text_codepage = None
+        detected_text = False
+        if mvs:
+            mime_dict.update(mvs)
+            extention = mvs['mvs_extension']
+            detected_text = mvs['mvs_format'] == 'ebcdic-text'
+
+        is_text = filetype == 'text/plain' or datatype != 'binary' or self.force or detected_text
+        if is_text:
+            text_codepage = self.__better_codepage(file_data)
+            if text_codepage or detected_text:
+                # record the page actually used for conversion
+                mime_dict['mvs_codepage'] = text_codepage or self.ebcdic
+
+        if is_text:
 
             if 'V' in recfm:
                 vb_member_text = ''
                 for record in vb_file_data:
-                    vb_member_text += self.convert_text_file(record, len(record)).rstrip() + '\n'
+                    vb_member_text += self.convert_text_file(record, len(record), codepage=text_codepage).rstrip() + '\n'
                 mime_dict['text'] = vb_member_text
 
             elif 'F' in recfm:
-                mime_dict['text'] = self.convert_text_file(file_data, lrecl)
+                mime_dict['text'] = self.convert_text_file(file_data, lrecl, codepage=text_codepage)
             elif 'U' in recfm:
-                mime_dict['text'] = self.convert_text_file(file_data, self.manual_recordlength)
+                mime_dict['text'] = self.convert_text_file(file_data, self.manual_recordlength, codepage=text_codepage)
             else:
-                mime_dict['text'] = self.convert_text_file(file_data, lrecl)
+                mime_dict['text'] = self.convert_text_file(file_data, lrecl, codepage=text_codepage)
 
             if self.__is_jcl(
                 mime_dict['text']
@@ -2912,6 +2993,78 @@ class XMIT:
         mime_dict['data'] = file_data
 
         return mime_dict
+
+    def __identify_mvs_format(self, filetype, file_data):
+        '''libmagic reports MVS binary formats (load modules, object decks,
+        GOFF, IEBCOPY unloads, TERSE, ...) as application/octet-stream.
+        For those, returns a dict of ``mvs_format``,
+        ``mvs_format_confidence``, ``mvs_format_description`` and
+        ``mvs_extension`` from :func:`xmi.formats.identify`, or ``None``.
+
+        Only high/medium confidence matches are used and the mimetype is
+        left untouched. For ``ebcdic-text`` the dict also has
+        ``mvs_codepages`` (the EBCDIC code pages that decode it best); the
+        caller converts it to text.
+        '''
+        if (self.force or filetype != 'application/octet-stream'
+                or not isinstance(file_data, (bytes, bytearray))):
+            return None
+        info = formats.identify(file_data, codepage=self.ebcdic)
+        if not info or info.confidence not in (formats.HIGH, formats.MEDIUM):
+            return None
+        self.logger.debug("MVS format: {} ({}) {}".format(info.name, info.confidence, info.description))
+        result = {
+            'mvs_format': info.name,
+            'mvs_format_confidence': info.confidence,
+            'mvs_format_description': info.description,
+            'mvs_extension': info.extension,
+        }
+        if info.name == 'ebcdic-text':
+            # The pages that decode it best, for information. The page used
+            # for conversion is decided by __better_codepage().
+            result['mvs_codepages'] = info.codepages
+        return result
+
+    def __better_codepage(self, file_data):
+        '''For EBCDIC text, returns a code page that fits clearly better
+        than the configured one (``self.ebcdic``), or ``None`` to keep the
+        configured one. See ``xmi.formats.choose_codepage`` for the
+        (deliberately narrow) rules.'''
+        if not self.detect_codepage or not isinstance(file_data, (bytes, bytearray)):
+            return None
+        better = formats.choose_codepage(file_data, self.ebcdic)
+        if better:
+            self.logger.debug("Converting with code page {} instead of {}".format(better, self.ebcdic))
+        return better
+
+    def get_member_format(self, pds, member):
+        '''Identifies and parses an MVS binary format member (load module,
+        object deck, GOFF, ...) and returns the result of
+        :func:`xmi.formats.inspect`: a dict with ``format``
+        (:class:`~xmi.formats.FormatInfo`), ``details`` and ``error``.
+
+        For load modules the PDS directory entry is decoded too and added
+        as ``details['directory']`` (entry point, AMODE/RMODE, attributes),
+        because a load module's entry point is stored in the directory,
+        not in the module's records.
+        '''
+        self.check_parsed()
+        data_member = member
+        if self.is_alias(pds, member):
+            data_member = self.get_alias(pds, member)
+            if data_member is None:
+                raise Exception("Member Alias target not found")
+        data = self.get_member_binary(pds, data_member)
+        result = formats.inspect(data, codepage=self.ebcdic)
+        if result['format'].name == 'load-module' and result['details'] is not None:
+            # An alias has its own directory entry with its own entry point,
+            # so use this member's user data, not the alias target's.
+            files = self.xmit['file'] if self.has_xmi() else self.tape['file']
+            parms = files[pds]['members'][member].get('parms', b'')
+            directory = formats.parse_pds2_user_data(parms)
+            if directory:
+                result['details']['directory'] = directory
+        return result
 
     def __is_jcl(self, text_lines=''):
         '''Returns true if the first line starts with ``//`` and contains

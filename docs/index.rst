@@ -25,6 +25,7 @@ and *IEBCOPY File Format* describe the file structure of each.
    netdata
    virtualtape
    iebcopy
+   formats
    support
 
 

@@ -48,6 +48,7 @@ setup(
         'console_scripts': [
             'extractxmi=xmi.cli:extract_main',
             'createxmi=xmi.cli:create_main',
+            'mvsfile=xmi.cli:identify_main',
         ],
     },
     project_urls={

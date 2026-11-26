@@ -76,6 +76,9 @@ def extract_main():
     ap.add_argument('--encoding',
         help='EBCDIC codepage (default: cp1140)',
         default='cp1140')
+    ap.add_argument('--no-detect-codepage',
+        help='Always convert text with --encoding; do not try other EBCDIC code pages',
+        dest='detect_codepage', action='store_false', default=True)
     ap.add_argument('FILE', help='XMI / AWS / HET file to open')
     ap.add_argument('MEMBER',
         help='Dataset or dataset(member) to extract',
@@ -93,6 +96,7 @@ def extract_main():
         force_convert=args.force,
         binary=args.binary,
         modifydate=args.modify,
+        detect_codepage=args.detect_codepage,
     )
     X.open()
 
@@ -216,3 +220,51 @@ def create_main():
         loglevel=args.loglevel,
     )
     print('Created: {}'.format(output))
+
+
+# ---------------------------------------------------------------------------
+# mvsfile
+# ---------------------------------------------------------------------------
+
+def identify_main():
+    '''``file``-like identification of MVS / z/OS binary formats.'''
+    import json
+    from xmi import formats
+
+    ap = argparse.ArgumentParser(
+        description='Identify MVS / z/OS binary formats (load modules, object '
+                    'decks, GOFF, IEBCOPY unloads, TERSE, SMF, ...)',
+        usage='%(prog)s [options] FILE [FILE ...]',
+    )
+    ap.add_argument('FILE', nargs='+', help='File(s) to identify')
+    ap.add_argument('-v', '--verbose',
+        help='Parse the file and print the details as JSON',
+        action='store_true', default=False)
+    ap.add_argument('--encoding',
+        help='EBCDIC codepage for names (default: {})'.format(formats.DEFAULT_CODEPAGE),
+        default=formats.DEFAULT_CODEPAGE)
+    args = ap.parse_args()
+
+    rc = 0
+    for path in args.FILE:
+        try:
+            with open(path, 'rb') as fh:
+                data = fh.read() if args.verbose else fh.read(formats.SNIFF_SIZE)
+                total = len(data) if args.verbose else os.fstat(fh.fileno()).st_size
+        except OSError as e:
+            print('{}: cannot open ({})'.format(path, e.strerror))
+            rc = 1
+            continue
+        if args.verbose:
+            result = formats.inspect(data, codepage=args.encoding)
+            print('{}:'.format(path))
+            print(json.dumps(formats.to_jsonable(result), indent=2))
+            continue
+        info = formats.identify(data, codepage=args.encoding, total_length=total)
+        line = '{}: {} ({})'.format(path, info.description, info.confidence)
+        if info.name == 'ambiguous':
+            line += ' candidates: ' + ', '.join(
+                '{} ({})'.format(c.name, c.confidence) for c in info.candidates)
+        print(line)
+    return rc
+
