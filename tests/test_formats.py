@@ -1004,6 +1004,12 @@ class TestVirtualTape(unittest.TestCase):
         self.assertEqual((info.name, info.confidence), ('aws', F.MEDIUM))
         # 2 blocks reaching exactly the end of the data: high.
         self.assertEqual(F.identify(two).confidence, F.HIGH)
+        # Sniff of a longer tape whose last block runs past the buffer
+        # (CBT875 AL68CAWS in 4 KB: 6 blocks, then a 3200-byte block):
+        # every header that fits is consistent, so high.
+        big = aws_tape([(b'A' * 80, 0xA0)] * 3 + [TM] + [(b'B' * 3200, 0xA0)] * 3)
+        info = F.identify(big[:4096], total_length=len(big))
+        self.assertEqual((info.name, info.confidence), ('aws', F.HIGH))
         # One header alone never matches.
         self.assertIsNone(F.is_virtual_tape(aws_block(b'A' * 100, 0)))
 
@@ -1061,3 +1067,27 @@ class TestVirtualTape(unittest.TestCase):
         self.assertEqual(x.get_files(), ['FILE0001'])
         self.assertTrue(x.is_tape_file('FILE0001'))
         self.assertEqual(x.get_file_info_simple('FILE0001')['extension'], '.aws')
+
+
+class TestPdseUnloadEnd(unittest.TestCase):
+    '''Regression (1.2.0): IndexError in __process_blocks on 188 CBT XMIs.
+
+    The 1.1.2 hang fix bounded the PDSE "skip the rest of the closed
+    member" loop, but then fell through with the last block's TTR/length
+    and indexed past the end of the data. Fixture: CBT1046
+    CBT.V509.FILE1046.PDS/ISPMLIB.xmi (a PDSE unload, one member).
+    Expected values are what 1.1.1 produced.
+    '''
+
+    def test_pdse_unload_matches_1_1_1(self):
+        import hashlib
+        path = Path(__file__).parent / 'samples' / 'PDSE_ISPMLIB.xmi'
+        x = xmi.XMIT(filename=str(path), quiet=True)
+        x.open()
+        pds = 'ABBYDALE.GENPREP.ISPMLIB'
+        self.assertEqual(x.xmit['file'][pds]['COPYR1']['type'], 'PDSE')
+        self.assertEqual(x.get_members(pds), ['GPREP00'])
+        data = x.xmit['file'][pds]['members']['GPREP00']['data']
+        self.assertEqual(len(data), 160)
+        self.assertEqual(hashlib.md5(data).hexdigest(),
+                         '45c60505566db4d4c201673bd179f889')

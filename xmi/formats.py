@@ -1836,6 +1836,14 @@ def tape_chain(data, total_len=None, max_blocks=_TAPE_WALK):
     Returns ``(blocks, reached_end, compressed)``, or ``None`` when the
     chain is inconsistent before ``max_blocks`` (so not a tape).
     '''
+    walk = _tape_walk(data, total_len, max_blocks)
+    return walk and walk[:3]
+
+
+def _tape_walk(data, total_len=None, max_blocks=_TAPE_WALK):
+    '''tape_chain() plus a 4th value: True when the walk used up the
+    whole buffer (the next header starts past it, so it is a sniff of a
+    longer file and every header that fits was consistent).'''
     n = len(data)
     total = n if total_len is None else max(total_len, n)
     pos = 0
@@ -1844,16 +1852,17 @@ def tape_chain(data, total_len=None, max_blocks=_TAPE_WALK):
     compressed = False
     while blocks < max_blocks:
         if pos == total:
-            return blocks, True, compressed
+            return blocks, True, compressed, False
         if pos + 6 > n:
             # Out of buffer (or a partial header at the very end).
-            return blocks, False, compressed
+            # used_buffer: the last block ran past the buffer.
+            return blocks, False, compressed, total > n and pos > n
         hdr = data[pos:pos + 6]
         cur = hdr[0] | (hdr[1] << 8)
         prv = hdr[2] | (hdr[3] << 8)
         f1 = hdr[4]
         if blocks and bytes(hdr) == b'\x00' * 6:
-            return blocks, False, compressed  # padding
+            return blocks, False, compressed, False  # padding
         if prv != prev or f1 & 0x1C or (cur == 0 and not f1 & 0x40):
             return None
         if pos + 6 + cur > total:
@@ -1863,18 +1872,21 @@ def tape_chain(data, total_len=None, max_blocks=_TAPE_WALK):
         prev = cur
         pos += 6 + cur
         blocks += 1
-    return blocks, False, compressed
+    return blocks, False, compressed, False
 
 
 def _detect_tape(data, total_len, codepage=None):
-    chain = tape_chain(data, total_len)
-    if not chain:
+    walk = _tape_walk(data, total_len)
+    if not walk:
         return None
-    blocks, reached_end, compressed = chain
+    blocks, reached_end, compressed, used_buffer = walk
     if blocks < 2:
         return None  # never on the first header alone
     name = 'het' if compressed else 'aws'
-    if blocks >= 8 or reached_end:
+    # HIGH: 8+ consistent blocks, or the chain ends exactly at the end of
+    # the data, or (a sniff of a longer file) every header in the buffer
+    # was consistent and large blocks carried the walk past its end.
+    if blocks >= 8 or reached_end or used_buffer:
         conf = HIGH
     else:
         conf = MEDIUM

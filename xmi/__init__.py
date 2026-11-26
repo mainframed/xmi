@@ -46,7 +46,7 @@ xmi Python Library
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 __author__ = 'Philip Young, Henri Kuiper'
 __license__ = "GPL"
 
@@ -2885,17 +2885,28 @@ class XMIT:
             # 00 00 00 00 04 45 00 09 04 00 03 C0
             # 00 00 00 00 00 3E 00 05 0E 00 00 FB
             # 00 00 00 00 00 3E 00 05 12 00 1D 38
+            if loc + 12 > len(member_blocks):
+                # Not even a block header left (trailing bytes).
+                break
             member_data_len = self.__get_int(member_blocks[loc + 10:loc + 12])
             member_ttr = self.__get_int(member_blocks[loc + 6:loc + 9])
 
             if PDS_or_PDSE == 'PDSE' and record_closed:
-                while loc + 12 <= len(member_blocks):
+                # Skip the rest of the blocks of the member just closed.
+                while True:
                     member_ttr = self.__get_int(member_blocks[loc + 6:loc + 9])
                     member_data_len = self.__get_int(member_blocks[loc + 10:loc + 12])
                     if member_ttr != prev_ttr:
                         break
+                    if loc + 12 > len(member_blocks):
+                        # Ran off the end (the reads above give 0/0 there,
+                        # which used to loop forever when prev_ttr was 0).
+                        member_ttr = member_data_len = 0
+                        break
                     loc += member_data_len + 12
                 record_closed = False
+                if loc + 12 > len(member_blocks):
+                    break
 
             if member_ttr == 0 and member_data_len == 0:
                 # skip empty entries
