@@ -106,8 +106,8 @@ createxmi --help                                          # full option list
 ```
 
 **`mvsfile`** identifies MVS binary formats that `file` reports as `data`.
-These include load modules, object decks (OBJ/XOBJ), GOFF, IEBCOPY unloads, TERSE, SMF and program
-objects. Extracted members get a matching extension (`.lmd`, `.obj`, `.gof`, ...)
+These include load modules, object decks (OBJ/XOBJ), GOFF, IEBCOPY unloads, TERSE, SMF, program
+objects and AWS/HET virtual tapes (also when they are members of an XMI or files on another tape). Extracted members get a matching extension (`.lmd`, `.obj`, `.gof`, ...)
 and an `mvs_format` field. See `docs/formats.rst`.
 
 ```bash

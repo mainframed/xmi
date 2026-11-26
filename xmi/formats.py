@@ -112,6 +112,9 @@ FORMATS = {
                  'application/x-mvs-iebupdte'),
     'pds-directory': ('PDS directory blocks (256-byte)', '.dir',
                       'application/x-mvs-pds-directory'),
+    'aws': ('AWS virtual tape image', '.aws', 'application/x-aws-tape'),
+    'het': ('HET virtual tape image (compressed AWS)', '.het',
+            'application/x-het-tape'),
     'ebcdic-text': ('EBCDIC text', '.txt', 'text/plain'),
     'ascii-text': ('ASCII text', '.txt', 'text/plain'),
 }
@@ -1799,6 +1802,95 @@ def _detect_pds_directory(head, total_len, codepage):
 
 
 # ---------------------------------------------------------------------------
+# AWS / HET virtual tapes
+# ---------------------------------------------------------------------------
+
+#: Mimetypes given to AWS / HET tape images (members, tape files).
+TAPE_MIMETYPES = ('application/x-aws-tape', 'application/x-het-tape')
+
+_TAPE_WALK = 16  # blocks; 8 consistent blocks already give HIGH
+
+
+def tape_chain(data, total_len=None, max_blocks=_TAPE_WALK):
+    '''Walks the AWS/HET block header chain at the start of ``data``.
+
+    Every block starts with a 6-byte header::
+
+        +0  curlen  LE16  bytes of data in this block
+        +2  prevlen LE16  curlen of the previous block (0 for the first)
+        +4  flags1        X'80' begin record, X'40' tapemark,
+                          X'20' end record, X'03' HET compression
+        +5  flags2
+
+    Rules: prevlen must equal the previous block's curlen, flags1 must
+    not have X'1C' set, and a block with curlen 0 must be a tapemark.
+    (CBT875's tapes start with a small data block flagged X'E0', so a
+    tapemark bit on a data block is accepted.) An all-zero header after
+    at least one good block is padding (tapes stored as PDS members are
+    padded to the block size) and ends the walk.
+
+    Only the headers are read, so this is cheap on a large buffer.
+    ``data`` may be just the start of a file; pass the real size as
+    ``total_len``.
+
+    Returns ``(blocks, reached_end, compressed)``, or ``None`` when the
+    chain is inconsistent before ``max_blocks`` (so not a tape).
+    '''
+    n = len(data)
+    total = n if total_len is None else max(total_len, n)
+    pos = 0
+    prev = 0
+    blocks = 0
+    compressed = False
+    while blocks < max_blocks:
+        if pos == total:
+            return blocks, True, compressed
+        if pos + 6 > n:
+            # Out of buffer (or a partial header at the very end).
+            return blocks, False, compressed
+        hdr = data[pos:pos + 6]
+        cur = hdr[0] | (hdr[1] << 8)
+        prv = hdr[2] | (hdr[3] << 8)
+        f1 = hdr[4]
+        if blocks and bytes(hdr) == b'\x00' * 6:
+            return blocks, False, compressed  # padding
+        if prv != prev or f1 & 0x1C or (cur == 0 and not f1 & 0x40):
+            return None
+        if pos + 6 + cur > total:
+            return None
+        if f1 & 0x03:
+            compressed = True
+        prev = cur
+        pos += 6 + cur
+        blocks += 1
+    return blocks, False, compressed
+
+
+def _detect_tape(data, total_len, codepage=None):
+    chain = tape_chain(data, total_len)
+    if not chain:
+        return None
+    blocks, reached_end, compressed = chain
+    if blocks < 2:
+        return None  # never on the first header alone
+    name = 'het' if compressed else 'aws'
+    if blocks >= 8 or reached_end:
+        conf = HIGH
+    else:
+        conf = MEDIUM
+    return _info(name, conf, '{}{} consistent blocks'.format(
+        blocks, '+' if blocks >= _TAPE_WALK else ''))
+
+
+def is_virtual_tape(data, total_length=None):
+    '''Returns ``'aws'``, ``'het'`` or ``None``: whether ``data`` is an
+    AWS/HET virtual tape image (high or medium confidence). Walks at most
+    16 block headers, so it is cheap on large buffers.'''
+    info = _detect_tape(data, len(data) if total_length is None else total_length)
+    return info.name if info else None
+
+
+# ---------------------------------------------------------------------------
 # identify / inspect
 # ---------------------------------------------------------------------------
 
@@ -1827,6 +1919,15 @@ def identify_all(data, codepage=DEFAULT_CODEPAGE, sniff=SNIFF_SIZE, total_length
     head = bytes(data[:sniff])
     total = len(data) if total_length is None else max(total_length, len(head))
     found = []
+    # Tape blocks are often larger than the sniff buffer, so walk the
+    # block headers through all of ``data`` (cheap: headers only).
+    try:
+        info = _detect_tape(data, total)
+    except Exception as e:
+        logger.debug('detector tape failed: %r', e)
+        info = None
+    if info:
+        found.append(info)
     for name, det in _DETECTORS:
         try:
             info = det(head, total, codepage)

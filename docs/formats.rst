@@ -63,10 +63,56 @@ iebupdte           .upd    detect      ``./ ADD``/``REPL``/``CHANGE``/``REPRO`` 
                                        first line, in EBCDIC or ASCII.
 pds-directory      .dir    detect      256-byte blocks with a 2-byte used length. Entries are in
                                        sorted order and end with X'FF' * 8.
+aws                .aws    detect      AWS virtual tape: a chain of 6-byte block headers (see below).
+het                .het    detect      As AWS, with HET compression bits (X'01' zlib, X'02' bzip2) set.
 ebcdic-text        .txt    detect      Heuristic. This is only a hint, and libmagic's decision is
                                        kept.
 ascii-text         .txt    detect      Heuristic.
 =================  ======  ==========  ================================================================
+
+Virtual tapes (AWS / HET)
+-------------------------
+
+Every block of an AWS or HET image starts with a 6-byte header:
+``<curlen LE16><prevlen LE16><flags1><flags2>``. flags1 is X'80' begin
+of record, X'40' tapemark and X'20' end of record; HET also uses X'03'
+for compression. :func:`xmi.formats.tape_chain` walks the headers:
+
+* the first block's prevlen is 0, and every later prevlen equals the
+  curlen of the block before it;
+* flags1 X'1C' must be clear, and a block with curlen 0 must be a
+  tapemark;
+* an all-zero header after a good block is padding (tapes stored as PDS
+  members are padded to the block size) and ends the walk.
+
+Two to seven consistent blocks give medium confidence; eight or more, or
+a chain that ends exactly at the end of the data, give high confidence.
+One header is never enough. Some real tapes (CBT875) start with a small
+data block flagged X'E0'; that is accepted. Only headers are read, at
+most 16, so the check is cheap on large members.
+
+``XMIT.open()`` uses the same check, so a binary whose bytes 2-4 happen
+to be zero is rejected with "File is not XMI or Virtual Tape" instead of
+being parsed as a tape. Tape images found as PDS members, sequential
+datasets in an XMI or files on another tape get extension ``.aws`` /
+``.het``, mimetype ``application/x-aws-tape`` /
+``application/x-het-tape`` and are never converted to text.
+``XMIT.is_tape_member(pds, member)`` and ``XMIT.is_tape_file(name)``
+report them without sniffing again, so callers can open them
+recursively.
+
+**Dataset names.** A standard label (HDR1) holds only the rightmost 17
+characters of the DSN, so ``ALGOL.F.COMPILER.MACLIB`` comes back as
+``F.COMPILER.MACLIB``. No longer name is available on the tape: HDR2
+and the IEBCOPY COPYR1/COPYR2 records do not contain the DSN. When the
+HDR1 name fills all 17 characters, the file and its ``HDR1`` dict carry
+``dsn_truncated: True`` (also in ``get_file_info_detailed()`` and the
+JSON). A name of exactly 17 characters is flagged too, because the two
+cases look the same.
+
+**Unlabeled tapes** name their files ``FILE0001``, ``FILE0002`` and so
+on. For a single-file unlabeled tape, ``open(infile='NAME')`` uses
+``NAME`` instead, e.g. the name of the member the tape came from.
 
 Load module record boundaries
 -----------------------------

@@ -249,7 +249,7 @@ def identify_main():
     for path in args.FILE:
         try:
             with open(path, 'rb') as fh:
-                data = fh.read() if args.verbose else fh.read(formats.SNIFF_SIZE)
+                data = fh.read() if args.verbose else fh.read(1 << 20)  # tape walk needs up to 16 blocks
                 total = len(data) if args.verbose else os.fstat(fh.fileno()).st_size
         except OSError as e:
             print('{}: cannot open ({})'.format(path, e.strerror))

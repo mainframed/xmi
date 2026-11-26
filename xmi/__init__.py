@@ -46,7 +46,7 @@ xmi Python Library
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-__version__ = "1.1.2"
+__version__ = "1.2.0"
 __author__ = 'Philip Young, Henri Kuiper'
 __license__ = "GPL"
 
@@ -559,7 +559,7 @@ class XMIT:
             self.set_xmit_object(self.file_object)
             self.parse_xmi()
             self.get_xmi_files()
-        elif self.filetype_is_tape(self.file_object[0:4]):
+        elif self.filetype_is_tape(self.file_object):
             self.tape = {}
             self.logger.debug("File is a Virtual Tape file")
             self.set_tape_object(self.file_object)
@@ -581,6 +581,14 @@ class XMIT:
         date or last modified date if available.
         '''
         self.modifydate = setting
+
+    def set_infile(self, infile):
+        '''
+        Sets the name used for the output instead of the one in the
+        metadata: the dataset name of an XMI without INMDSNAM, or the single
+        dataset of an unlabeled one-file tape (instead of ``FILE0001``).
+        '''
+        self.infile = infile
 
     def set_quiet(self, setting=True):
         '''
@@ -732,7 +740,7 @@ class XMIT:
         with open(self.filename, 'rb') as tapefile:
             self.tape_object = tapefile.read()
         self.logger.debug("Total bytes: {}".format(len(self.tape_object)))
-        if not self.filetype_is_tape(self.tape_object[0:4]):
+        if not self.filetype_is_tape(self.tape_object):
             raise Exception("File is not an AWS/HET file.")
 
     def is_xmi(self, pds, member_name):
@@ -754,6 +762,33 @@ class XMIT:
         if 'mimetype' in members and members['mimetype'] == 'application/xmit':
             return True
         return False
+
+    def is_tape_member(self, pds, member_name):
+        '''
+        Returns true if a member is an AWS/HET virtual tape image. Like
+        :meth:`is_xmi`, this only reads the mimetype recorded at unload
+        time, so callers can recurse without sniffing again.
+
+        Args:
+            pds (str): partioned dataset name
+            member_name (str): pds member
+        '''
+        self.check_parsed()
+        if self.has_xmi():
+            member = self.xmit['file'][pds]['members'][member_name]
+        else:
+            member = self.tape['file'][pds]['members'][member_name]
+        return member.get('mimetype') in formats.TAPE_MIMETYPES
+
+    def is_tape_file(self, filename):
+        '''Returns true if a dataset (sequential file in an XMI, or a file
+        on a tape) is an AWS/HET virtual tape image.'''
+        self.check_parsed()
+        if self.has_xmi():
+            f = self.xmit['file'][filename]
+        else:
+            f = self.tape['file'][filename]
+        return f.get('mimetype', f.get('filetype')) in formats.TAPE_MIMETYPES
 
     def has_xmi(self):
         ''' Returns True if this object has opened an XMI file. '''
@@ -1061,6 +1096,7 @@ class XMIT:
                 info['created'] = self.tape['file'][filename]['HDR1']['createdate']
                 info['expires'] = self.tape['file'][filename]['HDR1']['expirationdate']
                 info['syscode'] = self.tape['file'][filename]['HDR1']['system_code']
+                info['dsn_truncated'] = self.tape['file'][filename]['HDR1'].get('dsn_truncated', False)
             else:
                 info['dsnser'] = 'N/A'
                 info['created'] = 'N/A'
@@ -1446,15 +1482,15 @@ class XMIT:
         2 the number of bytes in the previous block
         3 end of file flag
 
-        To check if the file is a virtual tape file it confirms that
-        the first record previous bytes header is zero as there cannot be
-        any previous bytes at the beggining of the file.
+        It walks the block header chain (each block's "previous length"
+        must equal the length of the block before it, the flags must be
+        valid) with :func:`xmi.formats.is_virtual_tape`. A single header is
+        never enough, so random binaries whose bytes 2-4 happen to be zero
+        are not mistaken for tapes. Pass the whole file (or at least its
+        first few blocks).
         '''
-
-        self.logger.debug("Checking for 00 00 in bytes 2-4")
-        # Determine if a file is a virtual tape file
-        if self.__get_int(current_file[2:4]) == 0:
-            return True
+        self.logger.debug("Checking AWS/HET block chain")
+        return formats.is_virtual_tape(current_file) is not None
 
     def print_details(self, human=True):
         '''Prints a subset of available metadata for all datasets/members
@@ -1968,8 +2004,8 @@ class XMIT:
                         self.xmit['INMR02'][self.filelocation]['INMDSNAM'] = Path(self.filename).stem.upper()
 
                     if self.infile:
-                        self.logger.debug("Infile set to {}. Using as filename.".format(infile))
-                        dsn = infile
+                        self.logger.debug("Infile set to {}. Using as filename.".format(self.infile))
+                        dsn = self.infile
                     else:
                         dsn = self.xmit['INMR02'][self.filelocation]['INMDSNAM']  # filename
 
@@ -2332,6 +2368,9 @@ class XMIT:
                 HDR1 = {
                     # 'label_num' : self.make_int(t[3]),
                     'dsn' : t[4:21].strip(),
+                    # HDR1 holds only the rightmost 17 characters of the
+                    # DSN, so a full field means the name may be cut.
+                    'dsn_truncated' : len(t[4:21].rstrip()) == 17,
                     'dsnser' : t[21:27],
                     'volseq' : self.make_int(t[27:31]),
                     'dsnseq' : self.make_int(t[31:35]),
@@ -2398,14 +2437,21 @@ class XMIT:
                 if self.force:
                     extention = ".txt"
 
-                mvs = self.__identify_mvs_format(filetype, tape_file)
+                tape_in_tape = self.__tape_format(tape_file)
+                if tape_in_tape:
+                    mvs = tape_in_tape
+                    filetype = tape_in_tape['mvs_mimetype']
+                    datatype = 'binary'
+                    extention = tape_in_tape['mvs_extension']
+                else:
+                    mvs = self.__identify_mvs_format(filetype, tape_file)
                 text_codepage = None
                 detected_text = False
-                if mvs:
+                if mvs and not tape_in_tape:
                     extention = mvs['mvs_extension']
                     detected_text = mvs['mvs_format'] == 'ebcdic-text'
 
-                is_text = filetype == 'text/plain' or datatype != 'binary' or self.force or detected_text
+                is_text = not tape_in_tape and (filetype == 'text/plain' or datatype != 'binary' or self.force or detected_text)
                 if is_text:
                     text_codepage = self.__better_codepage(tape_file)
 
@@ -2445,6 +2491,7 @@ class XMIT:
 
                     if HDR1:
                         output['HDR1'] = HDR1
+                        output['dsn_truncated'] = HDR1.get('dsn_truncated', False)
                         msg = 'HDR1:'
                         for key in HDR1:
                             msg += " {}: {}".format(key, HDR1[key])
@@ -2457,7 +2504,6 @@ class XMIT:
                         self.logger.debug(msg)
 
                     if UHL:
-                        print("!! FOUND UHL !!" * 500)
                         output['UHL'] = UHL
                         for i in UHL:
                             self.logger.debug("User Label: {}".format(i))
@@ -2479,6 +2525,12 @@ class XMIT:
                 self.logger.debug('EOF')
 
             loc += cur_blocksize + 6
+
+        # An unlabeled tape with a single file: let the caller name it
+        # (like infile= for XMI), e.g. after the container member.
+        if self.infile and list(self.tape['file']) == ['FILE0001']:
+            self.logger.debug("Unlabeled single-file tape: using {} instead of FILE0001".format(self.infile))
+            self.tape['file'][self.infile] = self.tape['file'].pop('FILE0001')
 
         if volume_label:
             self.tape['label'] = volume_label
@@ -2972,6 +3024,18 @@ class XMIT:
             extention = ".xmi"
             filetype = 'application/xmit'
 
+        # AWS/HET tape images: always binary, never converted (even with
+        # force), so they can be opened again as tapes.
+        tape = self.__tape_format(file_data)
+        if tape:
+            self.logger.debug("File name: {} is a virtual tape ({})".format(file_name, tape['mvs_format']))
+            mime_dict.update(tape)
+            mime_dict['mimetype'] = tape['mvs_mimetype']
+            mime_dict['datatype'] = 'binary'
+            mime_dict['extension'] = tape['mvs_extension']
+            mime_dict['data'] = file_data
+            return mime_dict
+
         mvs = self.__identify_mvs_format(filetype, file_data)
         # EBCDIC text that libmagic missed: convert it with the code page
         # it decodes best with.
@@ -3021,6 +3085,23 @@ class XMIT:
         mime_dict['data'] = file_data
 
         return mime_dict
+
+    def __tape_format(self, file_data):
+        '''Returns the mvs_* dict for an AWS/HET tape image, else None.'''
+        if not isinstance(file_data, (bytes, bytearray)):
+            return None
+        if len(file_data) >= 8 and file_data[2:8] == 'INMR01'.encode(self.ebcdic):
+            return None
+        info = formats._detect_tape(file_data, len(file_data))
+        if not info:
+            return None
+        return {
+            'mvs_format': info.name,
+            'mvs_format_confidence': info.confidence,
+            'mvs_format_description': info.description,
+            'mvs_extension': info.extension,
+            'mvs_mimetype': info.mimetype,
+        }
 
     def __identify_mvs_format(self, filetype, file_data):
         '''libmagic reports MVS binary formats (load modules, object decks,

@@ -906,3 +906,158 @@ class TestXmitManagerSamples(unittest.TestCase):
             self.assertEqual(x.get_files(), ['SYS1.BINARY.SEQ'])
             self.assertTrue(x.has_message())
             self.assertIn('Xmit Manager', x.get_message())
+
+
+# ---------------------------------------------------------------------------
+# AWS / HET virtual tapes
+# ---------------------------------------------------------------------------
+
+AWS_SAMPLES = Path(__file__).parent / 'samples' / 'aws'
+
+
+def aws_block(data, prev, flags=0xA0):
+    '''One AWS block: <curlen LE16><prevlen LE16><flags1><flags2> data.
+    X'A0' = begin + end of record, X'40' = tapemark.'''
+    return (len(data).to_bytes(2, 'little') + prev.to_bytes(2, 'little')
+            + bytes([flags, 0]) + data)
+
+
+def aws_tape(blocks):
+    '''Chains a list of (data, flags) into an AWS image.'''
+    out, prev = b'', 0
+    for data, flags in blocks:
+        out += aws_block(data, prev, flags)
+        prev = len(data)
+    return out
+
+
+TM = (b'', 0x40)
+
+
+def labeled_tape(files, volser='TAPE01'):
+    '''Standard-labeled multi-file tape. ``files`` is a list of
+    (dsn, list of 80-byte EBCDIC records). Layout per file:
+    HDR1 HDR2 TM data TM EOF1 EOF2 TM; the tape ends with a second TM.
+    HDR1 cols 5-21 hold the rightmost 17 characters of the DSN.'''
+    e = lambda s: s.ljust(80).encode('cp037')
+    blocks = [(e('VOL1' + volser), 0xA0)]
+    for i, (dsn, records) in enumerate(files, 1):
+        # cols 5-21 DSN, 22-27 volser, 28-31 vol seq, 32-35 file seq,
+        # 36-39 gen, 40-41 version, 42-47 created, 48-53 expires,
+        # 54 security, 55-60 block count, 61-73 system code
+        hdr1 = ('HDR1' + dsn[-17:].ljust(17) + volser + '0001'
+                + '{:04d}'.format(i) + '0001' + '00' + ' 99001' + ' 99365'
+                + '0' + '000000' + 'IBMOS400')
+        blocks += [(e(hdr1), 0xA0), (e('HDR2F0080000080'), 0xA0), TM]
+        blocks += [(b''.join(records), 0xA0)]
+        blocks += [TM, (e('EOF1' + dsn[-17:]), 0xA0), (e('EOF2'), 0xA0), TM]
+    blocks.append(TM)
+    return aws_tape(blocks)
+
+
+class TestVirtualTape(unittest.TestCase):
+
+    def test_real_single_file_tape_e0_first_block(self):
+        # CBT875 ZLIBOBJ: first block is 4 bytes flagged X'E0' (tapemark
+        # bits set on a data block), unlabeled, one file, zero padded.
+        data = (AWS_SAMPLES / 'ZLIBOBJ.aws').read_bytes()
+        self.assertEqual(data[4], 0xE0)
+        info = F.identify(data)
+        self.assertEqual((info.name, info.confidence), ('aws', F.HIGH))
+        self.assertEqual(info.extension, '.aws')
+        self.assertEqual(info.mimetype, 'application/x-aws-tape')
+        x = xmi.XMIT(filename=str(AWS_SAMPLES / 'ZLIBOBJ.aws'), quiet=True)
+        x.open()
+        self.assertEqual(x.get_files(), ['FILE0001'])
+        x = xmi.XMIT(filename=str(AWS_SAMPLES / 'ZLIBOBJ.aws'), quiet=True)
+        x.open(infile='ZLIBOBJ')
+        self.assertEqual(x.get_files(), ['ZLIBOBJ'])
+
+    def test_multi_file_labeled_tape_and_truncated_dsn(self):
+        rec = lambda s: s.ljust(80).encode('cp037')
+        tape = labeled_tape([
+            ('ALGOL.F.COMPILER.MACLIB', [rec('LINE ONE'), rec('LINE TWO')]),
+            ('SHORT.NAME', [rec('HELLO')]),
+        ])
+        info = F.identify(tape)
+        self.assertEqual((info.name, info.confidence), ('aws', F.HIGH))
+        x = xmi.XMIT(quiet=True)
+        x.set_file_object(tape)
+        x.open()
+        # HDR1 keeps the rightmost 17 characters of the DSN.
+        self.assertEqual(x.get_files(), ['F.COMPILER.MACLIB', 'SHORT.NAME'])
+        self.assertTrue(x.tape['file']['F.COMPILER.MACLIB']['dsn_truncated'])
+        self.assertFalse(x.tape['file']['SHORT.NAME']['dsn_truncated'])
+        self.assertTrue(x.get_file_info_detailed('F.COMPILER.MACLIB')['dsn_truncated'])
+        self.assertIn('"dsn_truncated": true', x.get_json())
+
+    def test_het_compression_bits(self):
+        data = aws_tape([(b'x' * 80, 0xA1)] * 3 + [TM])
+        self.assertEqual(F.is_virtual_tape(data), 'het')
+        self.assertEqual(F.identify(data).extension, '.het')
+
+    def test_confidence_levels(self):
+        two = aws_tape([(b'A' * 100, 0xA0), (b'B' * 100, 0xA0)])
+        self.assertEqual(F.identify(two + b'\x99' * 50).name, 'unknown')
+        # 2 blocks, then the data continues past the buffer: medium.
+        info = F.identify(two, total_length=len(two) + 1000)
+        self.assertEqual((info.name, info.confidence), ('aws', F.MEDIUM))
+        # 2 blocks reaching exactly the end of the data: high.
+        self.assertEqual(F.identify(two).confidence, F.HIGH)
+        # One header alone never matches.
+        self.assertIsNone(F.is_virtual_tape(aws_block(b'A' * 100, 0)))
+
+    def test_rejects_bad_chains(self):
+        good = aws_tape([(b'A' * 10, 0xA0)] * 4)
+        self.assertEqual(F.is_virtual_tape(good), 'aws')
+        bad_prev = bytearray(good)
+        bad_prev[16 + 2] = 11          # block 2 prevlen != block 1 curlen
+        self.assertIsNone(F.is_virtual_tape(bytes(bad_prev)))
+        bad_flags = bytearray(good)
+        bad_flags[4] = 0xA4            # X'04' is not a valid flags1 bit
+        self.assertIsNone(F.is_virtual_tape(bytes(bad_flags)))
+        empty_not_tm = aws_tape([(b'A' * 10, 0xA0), (b'', 0xA0), (b'B', 0xA0)])
+        self.assertIsNone(F.is_virtual_tape(empty_not_tm))
+
+    def test_open_rejects_binary_with_zero_bytes_2_4(self):
+        # The old check (bytes 2-4 == 0) accepted this as a tape.
+        junk = b'\x12\x34\x00\x00' + bytes(range(256)) * 4
+        x = xmi.XMIT(quiet=True)
+        x.set_file_object(junk)
+        with self.assertRaises(Exception) as ctx:
+            x.open()
+        self.assertIn('File is not XMI or Virtual Tape', str(ctx.exception))
+
+    def test_xmi_with_aws_member(self):
+        tape = (AWS_SAMPLES / 'ZLIBOBJ.aws').read_bytes()
+        builder = xmi.XMIT(encoding='cp1047')
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / 'ZLIBOBJ.bin').write_bytes(tape)
+            (Path(d) / 'README.txt').write_text('hello\n')
+            data = builder.build_xmi(d, dsn='TAPES.PDS')
+        with tempfile.TemporaryDirectory() as out:
+            src = Path(out) / 'in.xmi'
+            src.write_bytes(data)
+            x = xmi.XMIT(filename=str(src), outputfolder=out + '/x', quiet=True)
+            x.open()
+            info = x.get_member_info('TAPES.PDS', 'ZLIBOBJ')
+            self.assertEqual(info['extension'], '.aws')
+            self.assertEqual(info['mimetype'], 'application/x-aws-tape')
+            self.assertTrue(x.is_tape_member('TAPES.PDS', 'ZLIBOBJ'))
+            self.assertFalse(x.is_tape_member('TAPES.PDS', 'README'))
+            self.assertNotIn(
+                'text', x.xmit['file']['TAPES.PDS']['members']['ZLIBOBJ'])
+            x.unload_files()
+            written = (Path(out) / 'x' / 'TAPES.PDS' / 'ZLIBOBJ.aws').read_bytes()
+            self.assertEqual(xmi.formats.is_virtual_tape(written), 'aws')
+
+    def test_tape_file_on_a_tape(self):
+        inner = labeled_tape([('INNER.DATA', [b'\xc1' * 80])])
+        outer = aws_tape([(inner[i:i + 1000], 0xA0)
+                          for i in range(0, len(inner), 1000)] + [TM, TM])
+        x = xmi.XMIT(quiet=True)
+        x.set_file_object(outer)
+        x.open()
+        self.assertEqual(x.get_files(), ['FILE0001'])
+        self.assertTrue(x.is_tape_file('FILE0001'))
+        self.assertEqual(x.get_file_info_simple('FILE0001')['extension'], '.aws')
