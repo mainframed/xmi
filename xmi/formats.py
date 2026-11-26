@@ -115,6 +115,8 @@ FORMATS = {
     'aws': ('AWS virtual tape image', '.aws', 'application/x-aws-tape'),
     'het': ('HET virtual tape image (compressed AWS)', '.het',
             'application/x-het-tape'),
+    'pdspack': ('ALGOL 68C packed PDS (PDSUNPK format, AWS-framed)', '.pak',
+                'application/x-a68c-packed-pds'),
     'ebcdic-text': ('EBCDIC text', '.txt', 'text/plain'),
     'ascii-text': ('ASCII text', '.txt', 'text/plain'),
 }
@@ -766,8 +768,9 @@ def _detect_obj(head, total_len, codepage):
                 xsd = True
             elif t == 'ESD' and b'@@DOPLNK'.decode('ascii').encode('cp037') in card:
                 xsd = True
-            # columns 5-10 are blank for ESD/TXT/RLD/END
-            if t == 'ESD' and card[4:10] != b'\x40' * 6:
+            # columns 5-10 are blank for ESD/TXT/RLD/END (IBM translators);
+            # some others (ALGOL 68C, CBT875) write X'00' there.
+            if t == 'ESD' and card[4:10].strip(b'\x40\x00'):
                 return None
         elif card[0] >= 0x40:
             other += 1  # control statements (NAME, ENTRY, ...)
@@ -1807,6 +1810,8 @@ def _detect_pds_directory(head, total_len, codepage):
 
 #: Mimetypes given to AWS / HET tape images (members, tape files).
 TAPE_MIMETYPES = ('application/x-aws-tape', 'application/x-het-tape')
+#: Mimetype of an ALGOL 68C packed PDS (see :func:`parse_pdspack`).
+PDSPACK_MIMETYPE = 'application/x-a68c-packed-pds'
 
 _TAPE_WALK = 16  # blocks; 8 consistent blocks already give HIGH
 
@@ -1883,6 +1888,8 @@ def _detect_tape(data, total_len, codepage=None):
     if blocks < 2:
         return None  # never on the first header alone
     name = 'het' if compressed else 'aws'
+    if not compressed and _pdspack_name(data) is not None:
+        name = 'pdspack'
     # HIGH: 8+ consistent blocks, or the chain ends exactly at the end of
     # the data, or (a sniff of a longer file) every header in the buffer
     # was consistent and large blocks carried the walk past its end.
@@ -1897,9 +1904,100 @@ def _detect_tape(data, total_len, codepage=None):
 def is_virtual_tape(data, total_length=None):
     '''Returns ``'aws'``, ``'het'`` or ``None``: whether ``data`` is an
     AWS/HET virtual tape image (high or medium confidence). Walks at most
-    16 block headers, so it is cheap on large buffers.'''
+    16 block headers, so it is cheap on large buffers.
+
+    An ALGOL 68C packed PDS uses the same block framing but is not a tape
+    (no drive would mount it); for that this returns ``None``. Use
+    :func:`is_pdspack`.'''
     info = _detect_tape(data, len(data) if total_length is None else total_length)
-    return info.name if info else None
+    return info.name if info and info.name != 'pdspack' else None
+
+
+# ---------------------------------------------------------------------------
+# ALGOL 68C packed PDS (PDSPACK / PDSUNPK)
+# ---------------------------------------------------------------------------
+#
+# CBT Tape file 875 (ALGOL 68C, C.J. Cheney) distributes partitioned
+# datasets packed into single FB-80 sequential files, restored on MVS by
+# its PDSUNPK program (object code only; the format is not documented).
+# Reverse engineered from the 14 packed libraries on that tape, the
+# stream uses AWS block headers (<curlen LE16><prevlen LE16><flags1>
+# <flags2>, prevlen chained):
+#
+#   X'E0' block   member name (1-8 EBCDIC characters) - starts a member
+#   X'A0' blocks  that member's records, one record per block, at their
+#                 real lengths (so RECFM=VB libraries survive packing)
+#   ...           next X'E0' name block, ...
+#   X'40'         tapemark (length 0) ends the stream; the 80-byte
+#                 records of the packed file are zero padded after it.
+#
+# Records split over blocks (X'80' ... X'20') are joined.
+
+def _pdspack_name(data):
+    '''Member name in the first block if it is a PDSPACK name block.'''
+    if len(data) < 7 or data[4] != 0xE0 or data[2] or data[3]:
+        return None
+    n = data[0] | (data[1] << 8)
+    if not 1 <= n <= 8 or len(data) < 6 + n:
+        return None
+    name = bytes(data[6:6 + n])
+    if not _is_ebcdic_name(name.ljust(8, b'\x40')):
+        return None
+    return name
+
+
+def is_pdspack(data, total_length=None):
+    '''True if ``data`` is an ALGOL 68C packed PDS (high/medium match).'''
+    info = _detect_tape(data, len(data) if total_length is None else total_length)
+    return bool(info) and info.name == 'pdspack'
+
+
+def parse_pdspack(data, codepage=DEFAULT_CODEPAGE):
+    '''Unpacks an ALGOL 68C packed PDS.
+
+    Returns ``{'members': [{'name': str, 'records': [bytes, ...]}, ...],
+    'complete': bool}``. ``complete`` is False when the stream ended
+    without its tapemark. Raises :class:`ParseError` on a broken block
+    chain or data before the first name block.'''
+    data = bytes(data)
+    n = len(data)
+    pos = prev = 0
+    members = []
+    rec = None
+    complete = False
+    while pos + 6 <= n:
+        cur = data[pos] | (data[pos + 1] << 8)
+        prv = data[pos + 2] | (data[pos + 3] << 8)
+        f1 = data[pos + 4]
+        if prv != prev or f1 & 0x1C:
+            if members and data[pos:pos + 6] == b'\x00' * 6:
+                break  # padding
+            raise ParseError('pdspack: bad block header at offset {}'.format(pos))
+        if pos + 6 + cur > n:
+            raise ParseError('pdspack: block at offset {} runs past end of data'.format(pos))
+        body = data[pos + 6:pos + 6 + cur]
+        if f1 == 0xE0 and 1 <= cur <= 8:
+            members.append({'name': body.decode(codepage).strip(), 'records': []})
+            rec = None
+        elif f1 & 0x40:
+            if cur:
+                raise ParseError('pdspack: tapemark with data at offset {}'.format(pos))
+            complete = True
+            break
+        else:
+            if not members:
+                raise ParseError('pdspack: data before the first member name')
+            if f1 & 0x80 or rec is None:
+                rec = bytearray()
+            rec += body
+            if f1 & 0x20:
+                members[-1]['records'].append(bytes(rec))
+                rec = None
+        prev = cur
+        pos += 6 + cur
+    if not members:
+        raise ParseError('pdspack: no members')
+    return {'members': members, 'complete': complete}
 
 
 # ---------------------------------------------------------------------------
@@ -1997,6 +2095,12 @@ def identify(data, codepage=DEFAULT_CODEPAGE, sniff=SNIFF_SIZE, total_length=Non
     return best
 
 
+def _pdspack_summary(r):
+    return {'complete': r['complete'],
+            'members': [{'name': m['name'], 'records': len(m['records'])}
+                        for m in r['members']]}
+
+
 _PARSERS = {
     'load-module': lambda d, cp: parse_load_module(d, cp, strict=False),
     'obj': parse_object_deck,
@@ -2005,6 +2109,7 @@ _PARSERS = {
     'iebcopy': parse_iebcopy,
     'terse': lambda d, cp: parse_terse_header(d),
     'smf': parse_smf,
+    'pdspack': lambda d, cp: _pdspack_summary(parse_pdspack(d, cp)),
     'vb': lambda d, cp: {k: (len(v) if k == 'records' else v) for k, v in parse_vb(d, blocked=True).items()},
     'rdw': lambda d, cp: {k: (len(v) if k == 'records' else v) for k, v in parse_vb(d, blocked=False).items()},
 }

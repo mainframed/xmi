@@ -957,21 +957,69 @@ def labeled_tape(files, volser='TAPE01'):
 
 class TestVirtualTape(unittest.TestCase):
 
-    def test_real_single_file_tape_e0_first_block(self):
-        # CBT875 ZLIBOBJ: first block is 4 bytes flagged X'E0' (tapemark
-        # bits set on a data block), unlabeled, one file, zero padded.
+    def test_real_pdspack_is_not_a_tape(self):
+        # CBT875 ZLIBOBJ: an ALGOL 68C packed PDS. AWS block framing, but
+        # the first block is an X'E0' member-name block, so it is
+        # 'pdspack', not a tape.
         data = (AWS_SAMPLES / 'ZLIBOBJ.aws').read_bytes()
         self.assertEqual(data[4], 0xE0)
         info = F.identify(data)
-        self.assertEqual((info.name, info.confidence), ('aws', F.HIGH))
-        self.assertEqual(info.extension, '.aws')
-        self.assertEqual(info.mimetype, 'application/x-aws-tape')
-        x = xmi.XMIT(filename=str(AWS_SAMPLES / 'ZLIBOBJ.aws'), quiet=True)
+        self.assertEqual((info.name, info.confidence), ('pdspack', F.HIGH))
+        self.assertEqual(info.extension, '.pak')
+        self.assertIsNone(F.is_virtual_tape(data))
+        self.assertTrue(F.is_pdspack(data))
+        packed = F.parse_pdspack(data)
+        self.assertTrue(packed['complete'])
+        self.assertEqual([m['name'] for m in packed['members']],
+                         ['CNVT', 'NIOP', 'RAND', 'XPLG', 'ZLIB'])
+        self.assertTrue(all(len(r) == 80 for m in packed['members']
+                            for r in m['records']))
+
+    def test_open_pdspack_as_pds(self):
+        path = AWS_SAMPLES / 'ZLIBOBJ.aws'
+        with tempfile.TemporaryDirectory() as out:
+            x = xmi.XMIT(filename=str(path), outputfolder=out, quiet=True)
+            x.open()
+            self.assertEqual(x.get_files(), ['ZLIBOBJ'])
+            self.assertTrue(x.is_pds('ZLIBOBJ'))
+            self.assertEqual(x.get_members('ZLIBOBJ'),
+                             ['CNVT', 'NIOP', 'RAND', 'XPLG', 'ZLIB'])
+            # Object decks once the name blocks are out of the way.
+            self.assertEqual(
+                x.get_member_info('ZLIBOBJ', 'ZLIB')['extension'], '.obj')
+            x.unload_files()
+            x.get_json()
+            self.assertTrue((Path(out) / 'ZLIBOBJ' / 'ZLIB.obj').exists())
+        x = xmi.XMIT(filename=str(path), quiet=True)
+        x.open(infile='MY.LIB')
+        self.assertEqual(x.get_files(), ['MY.LIB'])
+
+    def test_pdspack_variable_text_members(self):
+        # Synthetic packed PDS with VB text: one record per block.
+        e = lambda t: t.encode('cp037')
+        packed = aws_tape([(e('DOC'), 0xE0), (e('LINE ONE'), 0xA0),
+                           (e('A MUCH LONGER SECOND LINE OF TEXT'), 0xA0),
+                           (e('CODE'), 0xE0), (e('X = 1;'), 0xA0), TM])
+        packed += b'\x00' * (80 - len(packed) % 80)  # FB-80 padding
+        x = xmi.XMIT(quiet=True)
+        x.set_file_object(packed)
+        x.open(infile='LIB')
+        self.assertEqual(x.get_members('LIB'), ['DOC', 'CODE'])
+        self.assertEqual(x.get_member_text('LIB', 'DOC'),
+                         'LINE ONE\nA MUCH LONGER SECOND LINE OF TEXT\n')
+        self.assertEqual(x.get_member_text('LIB', 'CODE'), 'X = 1;\n')
+
+    def test_unlabeled_tape_one_record_per_block(self):
+        # Variable-length blocks on an unlabeled tape are records; they
+        # used to be run together and cut every 80 bytes.
+        e = lambda t: t.encode('cp037')
+        lines = ['FIRST', 'SECOND LINE', 'THIRD AND LAST LINE OF THIS FILE']
+        tape = aws_tape([(e(l), 0xA0) for l in lines] * 20 + [TM, TM])
+        x = xmi.XMIT(quiet=True)
+        x.set_file_object(tape)
         x.open()
-        self.assertEqual(x.get_files(), ['FILE0001'])
-        x = xmi.XMIT(filename=str(AWS_SAMPLES / 'ZLIBOBJ.aws'), quiet=True)
-        x.open(infile='ZLIBOBJ')
-        self.assertEqual(x.get_files(), ['ZLIBOBJ'])
+        text = x.tape['file']['FILE0001']['text']
+        self.assertEqual(text.splitlines()[:3], lines)
 
     def test_multi_file_labeled_tape_and_truncated_dsn(self):
         rec = lambda s: s.ljust(80).encode('cp037')
@@ -1035,10 +1083,13 @@ class TestVirtualTape(unittest.TestCase):
         self.assertIn('File is not XMI or Virtual Tape', str(ctx.exception))
 
     def test_xmi_with_aws_member(self):
-        tape = (AWS_SAMPLES / 'ZLIBOBJ.aws').read_bytes()
+        rec = lambda t: t.ljust(80).encode('cp037')
+        tape = labeled_tape([('MY.DATA', [rec('HELLO')] * 40)])
         builder = xmi.XMIT(encoding='cp1047')
         with tempfile.TemporaryDirectory() as d:
-            (Path(d) / 'ZLIBOBJ.bin').write_bytes(tape)
+            (Path(d) / 'MYTAPE.bin').write_bytes(tape)
+            (Path(d) / 'PACKED.bin').write_bytes(
+                (AWS_SAMPLES / 'ZLIBOBJ.aws').read_bytes())
             (Path(d) / 'README.txt').write_text('hello\n')
             data = builder.build_xmi(d, dsn='TAPES.PDS')
         with tempfile.TemporaryDirectory() as out:
@@ -1046,15 +1097,20 @@ class TestVirtualTape(unittest.TestCase):
             src.write_bytes(data)
             x = xmi.XMIT(filename=str(src), outputfolder=out + '/x', quiet=True)
             x.open()
-            info = x.get_member_info('TAPES.PDS', 'ZLIBOBJ')
+            info = x.get_member_info('TAPES.PDS', 'MYTAPE')
             self.assertEqual(info['extension'], '.aws')
             self.assertEqual(info['mimetype'], 'application/x-aws-tape')
-            self.assertTrue(x.is_tape_member('TAPES.PDS', 'ZLIBOBJ'))
+            self.assertTrue(x.is_tape_member('TAPES.PDS', 'MYTAPE'))
             self.assertFalse(x.is_tape_member('TAPES.PDS', 'README'))
             self.assertNotIn(
-                'text', x.xmit['file']['TAPES.PDS']['members']['ZLIBOBJ'])
+                'text', x.xmit['file']['TAPES.PDS']['members']['MYTAPE'])
+            # The packed PDS member is labelled as such, not as a tape.
+            self.assertEqual(
+                x.get_member_info('TAPES.PDS', 'PACKED')['extension'], '.pak')
+            self.assertTrue(x.is_pdspack_member('TAPES.PDS', 'PACKED'))
+            self.assertFalse(x.is_tape_member('TAPES.PDS', 'PACKED'))
             x.unload_files()
-            written = (Path(out) / 'x' / 'TAPES.PDS' / 'ZLIBOBJ.aws').read_bytes()
+            written = (Path(out) / 'x' / 'TAPES.PDS' / 'MYTAPE.aws').read_bytes()
             self.assertEqual(xmi.formats.is_virtual_tape(written), 'aws')
 
     def test_tape_file_on_a_tape(self):

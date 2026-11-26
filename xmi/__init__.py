@@ -46,7 +46,7 @@ xmi Python Library
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-__version__ = "1.2.1"
+__version__ = "1.2.2"
 __author__ = 'Philip Young, Henri Kuiper'
 __license__ = "GPL"
 
@@ -559,6 +559,12 @@ class XMIT:
             self.set_xmit_object(self.file_object)
             self.parse_xmi()
             self.get_xmi_files()
+        elif formats.is_pdspack(self.file_object):
+            # ALGOL 68C packed PDS: AWS-framed but not a tape. Present it
+            # as a tape-like object holding one PDS.
+            name = self.infile or (Path(self.filename).stem.upper() if self.filename else 'PACKED')
+            self.logger.debug("File is an ALGOL 68C packed PDS, using name {}".format(name))
+            self.tape = {'file': {name: self.__pdspack_pds(self.file_object)}}
         elif self.filetype_is_tape(self.file_object):
             self.tape = {}
             self.logger.debug("File is a Virtual Tape file")
@@ -779,6 +785,19 @@ class XMIT:
         else:
             member = self.tape['file'][pds]['members'][member_name]
         return member.get('mimetype') in formats.TAPE_MIMETYPES
+
+    def is_pdspack_member(self, pds, member_name):
+        '''
+        Returns true if a member is an ALGOL 68C packed PDS (see
+        :func:`xmi.formats.parse_pdspack`). Open it with ``XMIT`` like a
+        tape; it unpacks to one PDS.
+        '''
+        self.check_parsed()
+        if self.has_xmi():
+            member = self.xmit['file'][pds]['members'][member_name]
+        else:
+            member = self.tape['file'][pds]['members'][member_name]
+        return member.get('mimetype') == formats.PDSPACK_MIMETYPE
 
     def is_tape_file(self, filename):
         '''Returns true if a dataset (sequential file in an XMI, or a file
@@ -2293,6 +2312,8 @@ class XMIT:
         UHL = []
         loc = 0
         tape_file = b''
+        tape_blocks = []  # data blocks (records) of the current file
+        tape_blocks_closed = True
         tape_text = ''
         current_record = ''
         file_num = 1
@@ -2343,15 +2364,22 @@ class XMIT:
             if 0x0200 == (flags & 0x0200):
                 # BZLIB Compression
                 self.logger.debug("Record compresed with BZLIB")
-                tape_file += bz2.decompress(self.tape_object[loc + 6:loc + cur_blocksize + 6])
                 current_record = bz2.decompress(self.tape_object[loc + 6:loc + cur_blocksize + 6])
+                tape_file += current_record
             elif 0x0100 == (flags & 0x0100):
                 self.logger.debug("Record compresed with zLIB")
-                tape_file += zlib.decompress(self.tape_object[loc + 6:loc + cur_blocksize + 6])
                 current_record = zlib.decompress(self.tape_object[loc + 6:loc + cur_blocksize + 6])
+                tape_file += current_record
             else:
                 tape_file += self.tape_object[loc + 6:loc + cur_blocksize + 6]
                 current_record = self.tape_object[loc + 6:loc + cur_blocksize + 6]
+            if current_record:
+                # A record split over several blocks continues until ENDREC.
+                if tape_blocks and not tape_blocks_closed:
+                    tape_blocks[-1] += current_record
+                else:
+                    tape_blocks.append(bytes(current_record))
+                tape_blocks_closed = bool(flags & 0x2000)
 
             if not volume_label and tape_file[:4].decode(self.ebcdic) == 'VOL1':
                 volume_label = {
@@ -2413,6 +2441,7 @@ class XMIT:
                 if tape_file[:4].decode(self.ebcdic) in ['VOL1', 'HDR1', 'HDR2', 'EOF1', 'EOF2']:
                     self.logger.debug('Skipping VOL/HDR/EOF records type: {}'.format(tape_file[:4].decode(self.ebcdic)))
                     tape_file = b''
+                    tape_blocks = []
                     continue
 
                 # if 'recfm' in HDR2 and 'V' in HDR2['recfm']:
@@ -2457,12 +2486,23 @@ class XMIT:
 
                 if is_text:
 
-                    if 'lrecl' in HDR2:
-                        if 'F' in HDR2['recfm']:
-                            tape_text = self.convert_text_file(tape_file, HDR2['lrecl'], codepage=text_codepage)
-                        # elif 'V' in HDR2['recfm']:
-                        #     for record in vb_tape_file:
-                        #         tape_text += self.convert_text_file(record, len(record)).rstrip() + '\n'
+                    if 'lrecl' in HDR2 and 'F' in HDR2['recfm']:
+                        tape_text = self.convert_text_file(tape_file, HDR2['lrecl'], codepage=text_codepage)
+                    elif 'lrecl' in HDR2 and 'V' in HDR2['recfm']:
+                        # Each block: BDW, then RDW-prefixed records.
+                        records = []
+                        for block in tape_blocks:
+                            records += self.handle_vb(block)
+                        tape_text = ''.join(
+                            self.convert_text_file(r, len(r), codepage=text_codepage).rstrip() + '\n'
+                            for r in records if r)
+                    elif tape_blocks and any(len(b) % self.manual_recordlength for b in tape_blocks):
+                        # Unlabeled (or RECFM=U): the block lengths vary, so
+                        # each block is one record. Cutting at a fixed
+                        # length would run the records together.
+                        tape_text = ''.join(
+                            self.convert_text_file(b, len(b), codepage=text_codepage).rstrip() + '\n'
+                            for b in tape_blocks)
                     else:
                         tape_text = self.convert_text_file(tape_file, self.manual_recordlength, codepage=text_codepage)
                 else:
@@ -2522,6 +2562,7 @@ class XMIT:
                     self.logger.debug('Empty tape entry, skipping')
 
                 tape_file = b''
+                tape_blocks = []
                 self.logger.debug('EOF')
 
             loc += cur_blocksize + 6
@@ -2558,6 +2599,13 @@ class XMIT:
                 continue
 
             dataset = self.tape['file'][filename]['data']
+            if self.tape['file'][filename].get('filetype') == formats.PDSPACK_MIMETYPE:
+                self.logger.debug("{} is an ALGOL 68C packed PDS, unpacking".format(filename))
+                try:
+                    self.tape['file'][filename].update(self.__pdspack_pds(dataset))
+                except formats.ParseError as e:
+                    self.logger.debug("Could not unpack {}: {}".format(filename, e))
+                continue
             copyr1_size = self.__get_int(dataset[:2])
             try:
                 self.tape['file'][filename]['COPYR1'] = self.iebcopy_record_1(dataset[:copyr1_size])
@@ -3096,6 +3144,34 @@ class XMIT:
         mime_dict['data'] = file_data
 
         return mime_dict
+
+    def __pdspack_pds(self, data):
+        '''Unpacks an ALGOL 68C packed PDS into the dict of a PDS dataset
+        (``members`` etc.), as get_tape_files() builds for IEBCOPY.'''
+        packed = formats.parse_pdspack(data, codepage=self.ebcdic)
+        lengths = {len(r) for m in packed['members'] for r in m['records']}
+        fixed = len(lengths) <= 1
+        lrecl = max(lengths) if lengths else 80
+        recfm = 'FB' if fixed else 'VB'
+        members = {}
+        for m in packed['members']:
+            records = m['records']
+            entry = {
+                'ttr': 0, 'alias': False, 'halfwords': 0, 'notes': 0,
+                'parms': b'', 'ispf': False,
+            }
+            entry.update(self.__get_file_mimetype_and_convert(
+                m['name'], b''.join(records), vb_file_data=records,
+                recfm='V' if not fixed else 'F', lrecl=lrecl))
+            members[m['name']] = entry
+        return {
+            'filetype': 'pds/directory',
+            'extension': None,
+            'pdspack': True,
+            'pdspack_complete': packed['complete'],
+            'COPYR1': {'DS1RECFM': recfm, 'DS1LRECL': lrecl, 'type': 'PDSPACK'},
+            'members': members,
+        }
 
     def __tape_format(self, file_data):
         '''Returns the mvs_* dict for an AWS/HET tape image, else None.'''

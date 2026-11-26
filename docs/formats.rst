@@ -47,7 +47,7 @@ load-module        .lmd    yes         Byte 0 is X'20' (CESD: bytes 2-3 zero, by
 program-object     .pob    detect      EBCDIC ``IEWPLMH`` at offset 0. This is the PDSE binder module
                                        header. IBM does not publish the format.
 obj                .obj    yes         80-byte cards with X'02' then ``ESD``/``TXT``/``RLD``/``END``/
-                                       ``SYM`` in columns 2-4. Columns 5-10 are blank on ESD cards.
+                                       ``SYM`` in columns 2-4. Columns 5-10 are blank (or X'00') on ESD cards.
 xobj               .obj    yes         As OBJ, plus ``XSD`` cards or an SD named ``@@DOPLNK``.
 goff               .gof    yes         X'03F000' (HDR) at offset 0. Every 80-byte record starts X'03',
                                        a known type nibble and version X'00'. RDW-prefixed variable
@@ -65,6 +65,8 @@ pds-directory      .dir    detect      256-byte blocks with a 2-byte used length
                                        sorted order and end with X'FF' * 8.
 aws                .aws    detect      AWS virtual tape: a chain of 6-byte block headers (see below).
 het                .het    detect      As AWS, with HET compression bits (X'01' zlib, X'02' bzip2) set.
+pdspack            .pak    yes         ALGOL 68C packed PDS: AWS block framing whose first block is an
+                                       X'E0' member-name block (see below).
 ebcdic-text        .txt    detect      Heuristic. This is only a hint, and libmagic's decision is
                                        kept.
 ascii-text         .txt    detect      Heuristic.
@@ -110,9 +112,44 @@ HDR1 name fills all 17 characters, the file and its ``HDR1`` dict carry
 JSON). A name of exactly 17 characters is flagged too, because the two
 cases look the same.
 
+**Records.** Labeled RECFM=F tapes are cut at the HDR2 LRECL, and
+RECFM=V tapes are split at their RDWs. On unlabeled tapes (or RECFM=U)
+where the block lengths vary, each block is one record, as it was
+written; tapes whose blocks are all multiples of 80 are still cut every
+80 bytes.
+
 **Unlabeled tapes** name their files ``FILE0001``, ``FILE0002`` and so
 on. For a single-file unlabeled tape, ``open(infile='NAME')`` uses
 ``NAME`` instead, e.g. the name of the member the tape came from.
+
+ALGOL 68C packed PDS (PDSUNPK)
+------------------------------
+
+CBT Tape file 875 (ALGOL 68C, C.J. Cheney) packs each partitioned dataset
+into one RECFM=FB LRECL=80 sequential file; its install job restores them
+with ``PGM=PDSUNPK``, which is supplied only as object code. The format is
+not documented anywhere I could find, and it is not a real tape: Hercules
+rejects a tapemark block that carries data. Reverse engineered from the
+12 packed libraries on that tape, the stream reuses AWS block headers:
+
+* an X'E0' block holding a member name (1-8 EBCDIC characters) starts a
+  member;
+* each following X'A0' block is one record of that member, at its real
+  length (so RECFM=VB libraries survive the 80-byte packing);
+* the next X'E0' block starts the next member;
+* a tapemark (X'40', length 0) ends the stream, followed by zero padding
+  to the 80-byte record boundary.
+
+:func:`xmi.formats.parse_pdspack` unpacks it. ``XMIT.open()`` on such a
+file presents one PDS (named after the file, or ``infile=``); when one is
+a file on a tape it is unpacked into a PDS in place; as a member of an
+XMI it gets ``.pak`` / ``application/x-a68c-packed-pds`` and
+``XMIT.is_pdspack_member()`` is true. :func:`xmi.formats.is_virtual_tape`
+returns ``None`` for it; use :func:`xmi.formats.is_pdspack`.
+
+The sequential file on that tape (TESTOUT, RECFM=VBA) uses the same
+framing without name blocks, so it is an ordinary unlabeled AWS stream
+and opens as a tape with one record per block.
 
 Load module record boundaries
 -----------------------------
